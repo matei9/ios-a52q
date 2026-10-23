@@ -683,3 +683,10 @@ Step 17: is_call_available (fast 64-bit) -> 0, answer 1; then PAS_SHUTDOWN `smc 
 thread stuck in TrustZone; rest of iOS fine, USB ping OK). No RedwoodGPU -> loader correctly left CA in software.
 **Patch 0096:** no PAS_SHUTDOWN before the first load (kgsl doesn't; boot-arg sweetgpuzapshutdown=1 to try).
 GL userland install via tools/a52q-install-gl.sh worked: 3984 blocks (15 MiB) in 55 runs flashed via fastbootd.
+
+**🎉🎉 Boot 0096 (21:50:32): THE ADRENO 618 RUNS COMMANDS AND DRAWS.** Steps 1-21 all OK: zap shader authenticated
+by TrustZone (no PAS shutdown first), CP started (CP_ME_INIT done, rptr 9), CP_SET_SECURE_MODE 0 done, CP_MEM_WRITE
+0x600dc0de read back, 2D engine fill of 1080x2400 (pitch 4352) correct: first px 00 80 ff ff, middle ff ff ff ff, last
+row ff 80 00 ff; "THE GPU IS KEPT ON for programs (RedwoodGPU service)". No UI acceleration yet: the steps ran 60 s +
+1.5 s pauses after boot, backboardd had already started and libsweet-gl found no RedwoodGPU. Next boot (no rebuild):
+`shim/out/a52q-boot-0096e.img` = 0096 + sweetgpudelay=5 sweetgpupause=0 so RedwoodGPU exists before backboardd.

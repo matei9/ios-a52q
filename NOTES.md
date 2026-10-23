@@ -591,3 +591,17 @@ CBAR, CB0). Boot next with sweetgpu=9.
   CBs unconfigured.
 NEXT (stage 3, writes): RSCC/PDC programming (adreno_a6xx_gmu.c _load_gmu_rpmh_ucode), SMMU context with our page
 tables, GMU firmware load (fw-a52q/gpu/a618_gmu.bin, must reach the kernel via the boot payload, not git) + boot + HFI.
+
+**Stage 3 (patch 0089, 2026-10-23):** sweet_adreno.c steps 10-15 (a618 legacy GMU path from the A52 kgsl:
+adreno_a6xx_gmu.c, kgsl_gmu.c, kgsl_hfi.c; SMMU page tables after HackiOS):
+10 GMU memory (icache 0x4000/dcache 0x44000 240K, persist 0x60000000, HFI 0x60100000 with legacy queue ids 0/4/5/1,
+   dump 0x60200000, log 0x60300000) + SMMU CB1, SMR1 = stream 5 (no mask: qcom,smmu-v2 one-cell ids);
+11 RSCC/PDC ucode (a618: TCS3 cx data 2, gfx arc 0x30090 per kgsl; cmd-db says gfx.lvl 0x30050 -> logged,
+   override sweetgpupdcgfx=); 12 a618_gmu.bin (legacy, 32K) into ITCM at GMU+0x3000 by registers + readback;
+13 fw_start registers (GENERAL_7, BOOT_CONFIG 2 TCM_BOOT, QTBL 0x60100000, fence range, CM3_CFG 0x4052, chipid
+   0x06018000, log, caches, RPMH_CTRL |= 0xf11) + SYSRESET 0, wait 0xbabeface;
+14 hfi-use-reg GX vote: BOOT_SLUMBER_OPTION 0, GX_VOTE_IDX 2 (gfx 64 LOW_SVS = 267 MHz), MX_VOTE_IDX 2 (256),
+   OOB boot_slumber (set bit 22, ack bit 30), SPTPRAC 0x778000 -> status bit 3, HFI_CTRL_INIT; 15 RBBM/VBIF reads.
+Firmware reaches the kernel via `tools/mkpayload.py --firmware fw-a52q/gpu` (container b'SWFW', ADT
+/chosen/memory-map "SweetFirmware", kernel reads via SecureDTGetProperty + ml_static_ptovirt).
+`tools/a52q-boot.sh KERNEL OUT.img [boot-args]` builds the A52 boot image with the standard args + firmware.

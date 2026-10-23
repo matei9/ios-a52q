@@ -112,6 +112,20 @@ injected into backboardd (CoreAnimation GL path). Port credited in file headers/
 gold 0x18325800; LUT 0x110 + 32n (src [31:30], lval [7:0] x 19.2 MHz, src 0 = 300 MHz), table ends at first repeat,
 write top row to DCVS_PERF_STATE_DESIRED 0x920 (+4n per core if CORE_DCVS_CTRL 0xbc bit0). Boot-arg sweetcpufreq=1;
 logs loop speed before/after. Use with cpus=8.
+
+**GPU facts (A52, live DT + ~/sm7125):** Adreno 618 (qcom,chipid 0x06010800), kgsl-3d0 0x5000000 (+0x40000), cx_dbgc
+0x5061000, cx_misc 0x509e000, qfprom 0x780000; GMU 0x506a000 (+0x31000), GMU PDC cfg 0xb290000, PDC seq 0xb490000;
+gpucc 0x5090000 = gpucc-sdmmagpie.c (SAME block as sweet's SM7150): cx gdsc 0x106c, gx gdsc 0x100c, gmu rcg 0x1120
+(src 6 = GPLL0 main div 300 MHz, /1.5 -> 200 MHz), cxo 0x109c, ahb 0x1078, cx_apb 0x1088, cx_snoc_dvm 0x108c, cx_gmu 0x1098,
+gx_gmu 0x1064, gx_gfx3d rcg 0x101c (180..825 MHz CRC_DIV). GCC: gpu_cfg_ahb 0x71004, memnoc_gfx 0x7100c, snoc_dvm_gfx
+0x71018, ddrss_gpu_axi 0x4452c, gpll0 votes 0x52000 bits 15/16. a618 = a630 family: VBIF (word 0x3000), not GBIF; pre-a650
+GMU (RSCC inside the GMU block, kernel programs PDC/RSC sequences). Firmware pulled from the phone into `fw-a52q/gpu/`
+(gitignored): a618_gmu.bin (vendor/firmware), a630_sqe.fw, a615_zap.mdt/.b00-.b02 (apnhlos image/), DT zap name a615_zap.
+**Patch 0087:** `bsd/dev/sweet_adreno.c` stage 1 = HackiOS steps 1-6 ported (boot-arg sweetgpu=N, thread after
+sweetgpudelay=60 s, sweetgpupause=1500 ms before untested accesses so the 1 s log flush catches the last line):
+1 GCC GPU clocks + cmd-db gfx/cx/mx.lvl, 2 qfprom words, 3 gpu_cfg_ahb on + gpucc dump, 4 CX GDSC on, 5 GPLL0 votes +
+bus clocks + gmu_clk_src 200 MHz + gpucc branches, 6 GMU regs + always-on counter (19.2 MHz = alive) + cx_misc + VBIF (last:
+may need GX). Not pushed until CI of 0086 finishes (avoid cancel).
 Android data is gone (approved); stock boot in backup/a52q/boot.img.
 
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes

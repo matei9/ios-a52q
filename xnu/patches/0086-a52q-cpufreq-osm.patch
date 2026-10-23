@@ -1,0 +1,168 @@
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -111,6 +111,7 @@
+ bsd/dev/sweet_rpmh.c			standard
+ bsd/dev/sweet_spmi.c			standard
+ bsd/dev/sweet_usb.c			standard
++bsd/dev/sweet_cpufreq.c			standard
+ bsd/dev/mem.c				standard
+ bsd/dev/munge.c 			optional config_requires_u32_munging
+diff --git a/bsd/dev/sweet_cpufreq.c b/bsd/dev/sweet_cpufreq.c
+new file mode 100644
+index 0000000..c4a054a
+--- /dev/null
++++ b/bsd/dev/sweet_cpufreq.c
+@@ -0,0 +1,133 @@
++/*
++ * SWEET/a52q: run the CPU clusters and the L3 at their top frequency.
++ *
++ * The boot loader leaves the clusters at a low operating point and expects the
++ * OS to ask for more. On SM7125 (atoll) the cluster clocks are run by the
++ * Operating State Manager ("OSM", Linux drivers/clk/qcom/clk-cpu-osm.c): it
++ * has a lookup table of up to 40 rows per domain, and switches clock source,
++ * PLL and voltage by itself when told which row is wanted. We only ever want
++ * the top row. Thermal limits (LMh) still apply in hardware.
++ *
++ * Idea and structure after HackiOS redwood_cpufreq.c (EPSS variant), by OOSEX
++ * GANG, https://github.com/oosexgang/hackios-xnu-kernel (APSL 2.0).
++ *
++ * Only with boot-arg sweetcpufreq=1 and sweetboard=a52q: the addresses are the
++ * A52's (live DT qcom,cpucc@18321000 "qcom,clk-cpu-osm-atoll").
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <kern/clock.h>
++#include <mach/mach_time.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++void sweet_cpufreq_init(void);
++
++#define OSM_SIZE                0x1400u
++#define OSM_ENABLE              0x000u
++#define OSM_FREQ_LUT            0x110u          /* row n at + 32 n: [31:30] source, [7:0] multiple of XO */
++#define OSM_ROW                 32u
++#define OSM_ROWS                40u
++#define OSM_CORE_DCVS_CTRL      0x0bcu          /* bit 0: one desired state per core */
++#define OSM_PERF_STATE(n)       (0x920u + 4u * (n))
++#define XO_KHZ                  19200u
++#define OSM_INIT_KHZ            300000u         /* source 0: the fixed 300 MHz */
++
++static const struct {
++	const char *name;
++	vm_offset_t pa;
++	unsigned cores;         /* desired-state slots to write */
++} osm_domains[] = {
++	{ "l3", 0x18321000, 1 },
++	{ "silver", 0x18323000, 6 },    /* cpu0-5, Cortex-A55 */
++	{ "gold", 0x18325800, 2 },      /* cpu6-7, Cortex-A76 */
++};
++
++static uint32_t
++osm_rd(vm_offset_t base, uint32_t off)
++{
++	uint32_t v = *(volatile uint32_t *)(base + off);
++	__asm__ volatile ("dmb oshld" ::: "memory");
++	return v;
++}
++
++static void
++osm_wr(vm_offset_t base, uint32_t off, uint32_t v)
++{
++	__asm__ volatile ("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(base + off) = v;
++	__asm__ volatile ("dsb osh" ::: "memory");
++}
++
++static uint32_t
++osm_row_khz(vm_offset_t base, unsigned row)
++{
++	uint32_t v = osm_rd(base, OSM_FREQ_LUT + row * OSM_ROW);
++	return (v >> 30) ? XO_KHZ * (v & 0xffu) : OSM_INIT_KHZ;
++}
++
++/* How fast a simple loop runs: thousands of iterations per millisecond. */
++static uint32_t
++loop_speed(void)
++{
++	volatile uint64_t sink = 0;
++	uint64_t start = mach_absolute_time(), nanos;
++	for (uint32_t i = 0; i < 2000000; i++) {
++		sink += i;
++	}
++	(void)sink;
++	absolutetime_to_nanoseconds(mach_absolute_time() - start, &nanos);
++	return nanos ? (uint32_t)(2000000ULL * 1000 / nanos) : 0;
++}
++
++void
++sweet_cpufreq_init(void)
++{
++	int enabled = 0;
++	char board[16] = {0};
++	(void)PE_parse_boot_argn("sweetcpufreq", &enabled, sizeof(enabled));
++	if (!enabled) {
++		return;
++	}
++	if (!PE_parse_boot_arg_str("sweetboard", board, sizeof(board)) || strcmp(board, "a52q") != 0) {
++		printf("SWEET CPUFREQ: only the a52q OSM layout is known; skipped\n");
++		return;
++	}
++	uint32_t before = loop_speed();
++	for (unsigned d = 0; d < sizeof(osm_domains) / sizeof(osm_domains[0]); d++) {
++		vm_offset_t base = ml_io_map(osm_domains[d].pa, OSM_SIZE);
++		if (base == 0) {
++			printf("SWEET CPUFREQ: %s map failed\n", osm_domains[d].name);
++			continue;
++		}
++		uint32_t en = osm_rd(base, OSM_ENABLE);
++		if (!(en & 1u)) {
++			printf("SWEET CPUFREQ: %s OSM not enabled by firmware (%#x); left alone\n",
++			    osm_domains[d].name, en);
++			continue;
++		}
++		/* The table ends at the first row that repeats its predecessor (clk_osm_read_lut). */
++		unsigned rows = OSM_ROWS;
++		for (unsigned r = 1; r < OSM_ROWS; r++) {
++			if (osm_row_khz(base, r) == osm_row_khz(base, r - 1)) {
++				rows = r;
++				break;
++			}
++		}
++		unsigned top = rows - 1;
++		bool per_core = osm_rd(base, OSM_CORE_DCVS_CTRL) & 1u;
++		unsigned slots = per_core ? osm_domains[d].cores : 1;
++		uint32_t was = osm_rd(base, OSM_PERF_STATE(0));
++		for (unsigned s = 0; s < slots; s++) {
++			osm_wr(base, OSM_PERF_STATE(s), top);
++		}
++		printf("SWEET CPUFREQ: %s rows=%u row0=%u kHz top=%u kHz per-core=%d state %u -> %u\n",
++		    osm_domains[d].name, rows, osm_row_khz(base, 0), osm_row_khz(base, top),
++		    per_core, was, osm_rd(base, OSM_PERF_STATE(0)));
++	}
++	delay(2000);
++	printf("SWEET CPUFREQ: boot cpu loop speed %u -> %u k/ms\n", before, loop_speed());
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 6b926fe..682698d 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -53,6 +53,7 @@ extern void sweet_sample_start(void);
+ extern void sweet_keys_init(void);
+ extern void sweet_touch_init(void);
+ extern void sweet_usb_probe(void);
++extern void sweet_cpufreq_init(void);
+ 
+ #define REG_CAP         0x00
+ #define REG_IS          0x20
+@@ -657,6 +658,7 @@ sweet_ufs_init(void)
+ 	sweet_log_start();
+ 	sweet_sample_start();
+ 	/* Input drivers (HID services in iokit/Kernel/arm/hid/SweetHID.cpp). */
++	sweet_cpufreq_init();
+ 	sweet_keys_init();
+ 	sweet_touch_init();
+ 	sweet_usb_probe();

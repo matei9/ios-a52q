@@ -102,6 +102,16 @@ Touch startup lines were not captured (my `pkill -f` killed the new listener: th
 USB REGRESSION/ODDITY: host enumerated only at 19:25:00 (~5 min after reboot vs ~50 s on 0084), then 0 RX packets and
 17910 RX errors on enp0s20f0u2, ping fails. Unknown whether the bit-bang touch thread (busy-wait delay()) disturbs the
 USB poll thread or something else; investigate (pull ring log from TWRP: tools/sweet-log-pull.sh).
+
+**CPU + GPU plan (2026-10-23 evening), reference: HackiOS by OOSEX GANG** (github.com/oosexgang/hackios-xnu-kernel APSL-2.0,
+hackios-xnu-userland MIT; POCO X5 Pro, SD778G, Adreno 642L, iOS 16.5): `redwood_cpufreq.c` (EPSS top row, cpus=8),
+`redwood_adreno.c` (22-step Adreno bring-up: CX GDSC, GMU fw, SMMU, TZ zap, SQE, ring), `RedwoodGPU.cpp` (IOKit user
+client speaking Linux msm DRM ioctls for Mesa freedreno), userland Mesa 25.0.7 for Darwin + `eagl.c` OpenGL ES bridge
+injected into backboardd (CoreAnimation GL path). Port credited in file headers/commits (user asked for their credit).
+**Patch 0086:** `bsd/dev/sweet_cpufreq.c`, a52q OSM (Linux clk-cpu-osm.c): domains L3 0x18321000, silver 0x18323000,
+gold 0x18325800; LUT 0x110 + 32n (src [31:30], lval [7:0] x 19.2 MHz, src 0 = 300 MHz), table ends at first repeat,
+write top row to DCVS_PERF_STATE_DESIRED 0x920 (+4n per core if CORE_DCVS_CTRL 0xbc bit0). Boot-arg sweetcpufreq=1;
+logs loop speed before/after. Use with cpus=8.
 Android data is gone (approved); stock boot in backup/a52q/boot.img.
 
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes

@@ -567,3 +567,14 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
      cpu_init, before arm_vm_init.
   5. panic hook at top of panic_trap_to_debugger: va_copy + _doprnt(fmt, &copy, sweet_early_putc, 16).
   Verify with tools/xnu-cc.py (compile+symbols) and patch-order simulation before the single CI run.
+
+**Boot 0087 (2026-10-23 19:56:54, `shim/out/a52q-boot-0087.img`, cpus=8 sweetcpufreq=1 sweetgpu=6):**
+- 🎉 CPUFREQ works: l3 rows=11 top 1459.2 MHz (state 7->10), silver rows=10 top 1804.8 MHz (6->9), gold rows=13
+  652.8 MHz -> 2323.2 MHz (0->12), per-core DCVS off; boot cpu loop speed 378 -> 451 k/ms.
+- PANIC (photo ~/panic.jpg) after the Apple logo, in the GPU thread step 1: data abort esr 0x96000003 (address size
+  fault) far 0xfffffe3fa666c004; x21 = 0x0000104080820000 = cmd-db pa 0x80820000 | size 0x1040 << 32: the locator
+  (0xc3f000c, 8 bytes) is two words (address, size), I read it as one u64. GCC reads before it worked (x23 = 0x71004).
+**Patch 0088:** cmd-db locator fix (32-bit address + size, bounds 0x1000), VBIF read gated by sweetgpuvbif=1, new
+read-only steps 7 RSCC (kgsl word w -> GMU byte 4*(w-0x1a800): RSC_STATUS0 0x23404, SLAVE_ID 0x2340b, SEQ_MEM 0x23580...),
+8 PDC (cfg 0xb290000: ENABLE 0x1140w, SEQ_START 0x1148w, TCS1 0x1572w; seq 0xb490000), 9 SMMU 0x5040000 (IDR0-7, SMR/S2CR,
+CBAR, CB0). Boot next with sweetgpu=9.

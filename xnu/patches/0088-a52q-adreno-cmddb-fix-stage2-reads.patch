@@ -1,0 +1,173 @@
+diff --git a/bsd/dev/sweet_adreno.c b/bsd/dev/sweet_adreno.c
+index 9fa8165..a893be5 100644
+--- a/bsd/dev/sweet_adreno.c
++++ b/bsd/dev/sweet_adreno.c
+@@ -22,6 +22,9 @@
+  *   5  writes  the GPU's bus clocks, the GMU clock to 200 MHz and its branches on
+  *   6  reads   the first registers of the GPU block: the GMU (its always-on counter must count),
+  *              the VBIF (a618 is an a630-family core: VBIF, not the GBIF of a640+), CX misc
++ *   7  reads   the GMU's RSCC (inside the GMU block on a618)
++ *   8  reads   the GPU PDC configuration and sequence memory
++ *   9  reads   the GPU SMMU (0x5040000): IDs, stream matching, first context bank
+  *
+  * Next stages (not here yet, in HackiOS order): RSCC/PDC (the a618 GMU's own RPMh path, whose
+  * sequence memory the kernel programs on pre-a650 parts), the GPU SMMU (kgsl iommu), TrustZone
+@@ -204,7 +207,13 @@ rpmh_resource(const char *name, uint16_t *levels, unsigned *level_count)
+ 		if (loc == 0) {
+ 			return 0;
+ 		}
+-		uint64_t pa = rd(loc + (CMD_DB_LOCATOR & 0xfff)) | (uint64_t)rd(loc + (CMD_DB_LOCATOR & 0xfff) + 4) << 32;
++		/* Two words: address, then size (boot 0087 panicked reading them as one 64-bit address). */
++		uint32_t pa = rd(loc + (CMD_DB_LOCATOR & 0xfff));
++		uint32_t size = rd(loc + (CMD_DB_LOCATOR & 0xfff) + 4);
++		printf("SWEET GPU: %u: cmd-db at %#x size %#x\n", step, pa, size);
++		if (pa == 0 || size == 0 || size > CMD_DB_SIZE) {
++			return 0;
++		}
+ 		cmd_db = (const struct cmd_db_header *)ml_io_map_wcomb((vm_offset_t)pa, CMD_DB_SIZE);
+ 		if (cmd_db == NULL) {
+ 			return 0;
+@@ -227,7 +236,7 @@ rpmh_resource(const char *name, uint16_t *levels, unsigned *level_count)
+ 			if (memcmp(entry[i].id, id, sizeof(id)) != 0) {
+ 				continue;
+ 			}
+-			if ((unsigned)slave->data_offset + entry[i].offset + entry[i].length > CMD_DB_SIZE - 0x1000) {
++			if ((unsigned)slave->data_offset + entry[i].offset + entry[i].length > 0x1000) {
+ 				count = 0;
+ 			}
+ 			for (unsigned l = 0; levels != NULL && l < count && l < 16; l++) {
+@@ -520,7 +529,13 @@ step_first_words(void)
+ 	announce("read CX misc (0x509e000)");
+ 	get(&cx_misc, "word 1", 4 * 1);
+ 	get(&cx_misc, "word 2", 4 * 2);
+-	/* Last: on the a630 family it is not certain that the VBIF answers without GX power. */
++	/* Last, and only when asked: on the a630 family the VBIF may need GX power (a hang would end the run). */
++	uint32_t vbif_ok = 0;
++	(void)PE_parse_boot_argn("sweetgpuvbif", &vbif_ok, sizeof(vbif_ok));
++	if (!vbif_ok) {
++		printf("SWEET GPU: %u: VBIF read skipped (sweetgpuvbif=1 to try)\n", step);
++		return true;
++	}
+ 	announce("read the GPU's VBIF (0x500c000); if this is the last line, the VBIF needs GX");
+ 	get(&vbif, "version", VBIF_VERSION);
+ 	get(&vbif, "clkon", VBIF_CLKON);
+@@ -529,10 +544,119 @@ step_first_words(void)
+ 	return true;
+ }
+ 
++/* ---- step 7: the GMU's RSCC (its channel to RPMh) ---- */
++
++/*
++ * kgsl a6xx_reg.h numbers GMU registers in words from the GPU base; the GMU block starts at word
++ * 0x1a800 (0x506a000). On a618 (pre-a650) the RSCC lives inside the GMU block and kgsl programs
++ * its sequence (adreno_a6xx_gmu.c _load_gmu_rpmh_ucode) before the GMU firmware starts.
++ */
++#define KGSL_GMU(w)             (4u * ((w) - 0x1a800u))
++#define RSCC_RSC_STATUS0_DRV0   KGSL_GMU(0x23404)
++#define RSCC_PDC_SLAVE_ID_DRV0  KGSL_GMU(0x2340b)
++#define RSCC_OVERRIDE_START     KGSL_GMU(0x23500)
++#define RSCC_SEQ_BUSY_DRV0      KGSL_GMU(0x23501)
++#define RSCC_SEQ_MEM_0_DRV0     KGSL_GMU(0x23580)
++#define RSCC_TCS0_DRV0_STATUS   KGSL_GMU(0x23746)
++#define GMU_RSCC_CONTROL_REQ    KGSL_GMU(0x23b07)
++
++static bool
++step_rscc(void)
++{
++	if (!gpucc_answers() || !cx_is_on()) {
++		printf("SWEET GPU: %u: needs steps 3-5\n", step);
++		return false;
++	}
++	announce("read the GMU's RSCC (0x508d000): status, slave id, sequence memory");
++	get(&gmu, "rscc rsc_status0_drv0", RSCC_RSC_STATUS0_DRV0);
++	get(&gmu, "rscc pdc_slave_id_drv0", RSCC_PDC_SLAVE_ID_DRV0);
++	get(&gmu, "rscc override_start", RSCC_OVERRIDE_START);
++	get(&gmu, "rscc seq_busy_drv0", RSCC_SEQ_BUSY_DRV0);
++	for (uint32_t i = 0; i < 5; i++) {
++		get(&gmu, "rscc seq_mem", RSCC_SEQ_MEM_0_DRV0 + 4 * i);
++	}
++	get(&gmu, "rscc tcs0_drv0_status", RSCC_TCS0_DRV0_STATUS);
++	get(&gmu, "gmu rscc_control_req", GMU_RSCC_CONTROL_REQ);
++	return true;
++}
++
++/* ---- step 8: the GPU's PDC ---- */
++
++/* DT qcom,gmu "kgsl_gmu_pdc_cfg" 0xb290000, "kgsl_gmu_pdc_seq" 0xb490000; kgsl a6xx_reg.h word offsets */
++static struct block pdc_cfg = { "pdc_cfg", 0x0b290000, 0x10000 };
++static struct block pdc_seq = { "pdc_seq", 0x0b490000, 0x10000 };
++#define PDC_GPU_ENABLE_PDC      (4u * 0x1140)
++#define PDC_GPU_SEQ_START_ADDR  (4u * 0x1148)
++#define PDC_GPU_TCS1_CONTROL    (4u * 0x1572)
++#define PDC_GPU_TCS1_CMD_ENABLE (4u * 0x1573)
++
++static bool
++step_pdc(void)
++{
++	announce("read the GPU PDC (0xb290000 cfg, 0xb490000 sequence memory)");
++	get(&pdc_cfg, "enable_pdc", PDC_GPU_ENABLE_PDC);
++	get(&pdc_cfg, "seq_start_addr", PDC_GPU_SEQ_START_ADDR);
++	get(&pdc_cfg, "tcs1_control", PDC_GPU_TCS1_CONTROL);
++	get(&pdc_cfg, "tcs1_cmd_enable_bank", PDC_GPU_TCS1_CMD_ENABLE);
++	for (uint32_t i = 0; i < 4; i++) {
++		get(&pdc_seq, "seq_mem", 4 * i);
++	}
++	return true;
++}
++
++/* ---- step 9: the GPU's SMMU ---- */
++
++/*
++ * DT qcom,kgsl-iommu@5040000 ("qcom,kgsl-smmu-v2", 0x10000); its clocks are gcc gpu_cfg_ahb,
++ * ddrss_gpu_axi and gpu_memnoc_gfx (steps 3 and 5). Context banks: gfx3d_user (stream 0),
++ * gfx3d_secure (stream 2). Layout: Linux arm-smmu.h. HackiOS steps 8-9.
++ */
++static struct block smmu = { "smmu", 0x05040000, 0x10000 };
++#define SMMU_SCR0               0x000
++#define SMMU_IDR0               0x020
++#define SMMU_IDR1               0x024
++#define SMMU_IDR2               0x028
++#define SMMU_IDR7               0x03c
++#define SMMU_SGFSR              0x048
++#define SMMU_SMR(n)             (0x800 + 4 * (n))
++#define SMMU_S2CR(n)            (0xc00 + 4 * (n))
++
++static bool
++step_smmu(void)
++{
++	announce("read the GPU SMMU (0x5040000): ID registers, stream matching, the first contexts");
++	get(&smmu, "scr0", SMMU_SCR0);
++	uint32_t idr0 = get(&smmu, "idr0", SMMU_IDR0);
++	uint32_t idr1 = get(&smmu, "idr1", SMMU_IDR1);
++	get(&smmu, "idr2", SMMU_IDR2);
++	get(&smmu, "idr7", SMMU_IDR7);
++	get(&smmu, "sgfsr", SMMU_SGFSR);
++	uint32_t smrs = idr0 & 0xffu, pagesize = (idr1 & (1u << 31)) ? 0x10000u : 0x1000u;
++	printf("SWEET GPU: %u: %u stream match registers, %u contexts, page %#x\n", step, smrs, idr1 & 0xffu, pagesize);
++	for (uint32_t n = 0; n < smrs && n < 8; n++) {
++		get(&smmu, "smr", SMMU_SMR(n));
++		get(&smmu, "s2cr", SMMU_S2CR(n));
++	}
++	if (pagesize == 0x1000u) {
++		/* second page: CBAR; contexts start at half the SMMU's size (numpage from IDR1 [30:28]) */
++		get(&smmu, "cbar0", 0x1000 + 0);
++		get(&smmu, "cbar1", 0x1000 + 4);
++		uint32_t numpage = 1u << (((idr1 >> 28) & 7u) + 1);
++		uint32_t cb = numpage * pagesize;
++		if (cb < smmu.size) {
++			get(&smmu, "cb0 sctlr", cb + 0x00);
++			get(&smmu, "cb0 ttbr0", cb + 0x20);
++			get(&smmu, "cb0 fsr", cb + 0x58);
++		}
++	}
++	return true;
++}
++
+ /* ---- driver ---- */
+ 
+ static bool (*const steps[])(void) = {
+ 	NULL, step_outside, step_fuses, step_gpucc, step_cx_power, step_clocks, step_first_words,
++	step_rscc, step_pdc, step_smmu,
+ };
+ 
+ static void

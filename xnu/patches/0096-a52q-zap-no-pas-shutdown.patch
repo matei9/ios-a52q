@@ -1,0 +1,24 @@
+diff --git a/bsd/dev/sweet_adreno.c b/bsd/dev/sweet_adreno.c
+index 59ddc98..17b3d0f 100644
+--- a/bsd/dev/sweet_adreno.c
++++ b/bsd/dev/sweet_adreno.c
+@@ -1502,8 +1502,17 @@ step_zap(void)
+ 	}
+ 	memcpy((void *)page, mdt, mdt_size);
+ 	to_memory(page, PAGE_SIZE);
+-	announce("give up a zap shader a kernel before may have left (TrustZone answers success either way)");
+-	(void)scm("to give up the zap shader", SCM_64 | SCM_SIP | SCM_PAS_SHUTDOWN, SCM_ONE_VALUE, PAS_GPU, 0, 0, &answer);
++	/*
++	 * No PAS_SHUTDOWN first (HackiOS needs it: its kernels restart without the phone): on this phone's
++	 * TrustZone that call never returned for an image that was not loaded (boot 0095), and kgsl does not
++	 * make it before a first load. Every boot here is a cold one. boot-arg sweetgpuzapshutdown=1 to try.
++	 */
++	uint32_t shutdown_first = 0;
++	(void)PE_parse_boot_argn("sweetgpuzapshutdown", &shutdown_first, sizeof(shutdown_first));
++	if (shutdown_first) {
++		announce("give up a zap shader a kernel before may have left");
++		(void)scm("to give up the zap shader", SCM_64 | SCM_SIP | SCM_PAS_SHUTDOWN, SCM_ONE_VALUE, PAS_GPU, 0, 0, &answer);
++	}
+ 	announce("hand TrustZone the zap shader's header and hashes (PAS init image)");
+ 	if (scm("to take the zap shader's signature", SCM_64 | SCM_SIP | SCM_PAS_INIT_IMAGE, SCM_VALUE_AND_BUFFER, PAS_GPU,
+ 	    kvtophys(page), 0, &answer) != 0 || answer != 0) {

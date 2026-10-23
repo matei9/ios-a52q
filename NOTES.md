@@ -676,3 +676,10 @@ sparsediff -> fastbootd flash userdata (changed blocks only). Not run yet. Needs
 **CI run 40002349489 (patches up to 0094) FAILED to link:** `_RedwoodGPUStart` undefined. SweetGPU.cpp compiled to
 nothing: its `#if defined(SWEET)` came before any include, and SWEET comes from <pexpert/arm64/board_config.h>
 (SweetSurface.h includes it first). **Patch 0095:** include board_config.h first.
+
+**Boot 0095 (21:38:48, sweetgpu=21 sweetgpukeep=1, GL userland installed):** steps 1-16 OK. 🎉 **GMU TALKS:** INIT ack,
+FW_VER -> 0x10110000 (1.17), PERF_TBL ack, BW_TBL (minimal) ack, TEST ack, register DCVS return 0 (267 MHz), OOB gpu.
+Step 17: is_call_available (fast 64-bit) -> 0, answer 1; then PAS_SHUTDOWN `smc 0x42000206 (13)` NEVER RETURNED (GPU
+thread stuck in TrustZone; rest of iOS fine, USB ping OK). No RedwoodGPU -> loader correctly left CA in software.
+**Patch 0096:** no PAS_SHUTDOWN before the first load (kgsl doesn't; boot-arg sweetgpuzapshutdown=1 to try).
+GL userland install via tools/a52q-install-gl.sh worked: 3984 blocks (15 MiB) in 55 runs flashed via fastbootd.

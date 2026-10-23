@@ -54,7 +54,22 @@ touch it), gpio9 cfg 1 (pull-down) io 0.
 mkiosroot + fsck (exit 1 = known "minor repair" quirk) + sweet-root-tweaks) flashed to userdata via TWRP fastbootd
 (`fastboot flash userdata research/ios16-root.simg`, 47/47 OKAY, 308 s; log research/flash-userdata-a52q.log).
 Boot image `shim/out/a52q-boot-0082.img` = shim + kernel 0082 + `shim/out/a52q.adt` (--board a52q), cmdline =
-README cmdline + `sweetboard=a52q sweetusb=2` (cpus=6), flashed to boot via fastbootd. RESULT: pending.
+README cmdline + `sweetboard=a52q sweetusb=2` (cpus=6), flashed to boot via fastbootd.
+**RESULT boot 0082 (log `logs/a52q-boot-0082.txt`, pulled after ~11 min on the Apple logo):** XNU + 6 CPUs + UFS root +
+launchd (uptime 38 s) + SpringBoard + backboardd all run; KEYS WORK (power/vol-down HID events). Screen stayed on the
+Apple logo: all 5 sampler samples show SpringBoard main thread in CCSModuleRepository -> LSApplicationRecord ->
+_LSContextInitCommon os_unfair_lock, held by t1 in _LSCopyServerStore ->
+__LAUNCH_SERVICES_IS_RESEEDING_ITS_DATABASE_AND_MAY_BLOCK__ (sync XPC to lsd) = first-boot LS database rebuild (slow or
+stuck - sample lsd next). fairplayd/bluetoothd respawn ~65x (as on sweet).
+- USB FAIL: `ep0 cmd 0x1 timeout` / `endpoint 0 setup failed`; host saw a low-speed device not answering SET_ADDRESS.
+  ahb2phy CBCR 0x8000000b (enabled but hw-gated). Cause (guess, strong): QUSB2 PHY never initialised by Samsung ABL.
+- TOUCH FAIL: `GCC branch 0x18010 halted`: atoll QUP vote register is 0x52008 (gcc-atoll.c), not sweet's 0x5200c
+  (0x5200c is unused on atoll). Also sweet_rpmh_vreg_enable only accepted ldoc11 -> would have refused ldoc7/ldoa10.
+- Shared cache for symbolication: `research/dyld/` (copied from SystemOS cryptex via user apfs-fuse).
+
+**Patch 0083:** touch vote reg 0x52008 on a52q; RPMh allowlist (ldoc11, ldoc7, ldoa10, ldoa4, ldoa11, ldoa17 with DT
+ranges); USB a52q QUSB2 init before gadget start (RPMh L4A 880 / L11A 1800 / L17A 3075 mV, ahb2phy + clkref CBCR on,
+GCC_QUSB2PHY_PRIM_BCR 0x26000 pulse, PWR_CTRL1 down, DT qusb-phy-init-seq, power up, log PLL_STATUS 0x1a0).
 Android data is gone (approved); stock boot in backup/a52q/boot.img.
 
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes

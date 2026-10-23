@@ -1,0 +1,74 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index b6bfbb4..dfda301 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5578,6 +5578,8 @@ bad:
+  */
+ static char sweet_inject_conf[256];
+ static int sweet_inject_read;
++/* bsd/dev/sweet_adreno.c: wait (up to ms) while the GPU bring-up runs, so the program finds RedwoodGPU */
++extern void sweet_gpu_wait_settled(uint32_t ms);
+ 
+ static bool
+ sweet_inject_env(struct image_params *imgp, char *env, size_t size)
+@@ -5605,7 +5607,9 @@ sweet_inject_env(struct image_params *imgp, char *env, size_t size)
+ 		}
+ 		if (namelen != 0 && (size_t)(p - word) == namelen && strncmp(word, name, namelen) == 0 &&
+ 		    liblen != 0 && liblen + sizeof("DYLD_INSERT_LIBRARIES=") < size) {
+-			size_t used = strlcpy(env, "DYLD_INSERT_LIBRARIES=", size);
++			size_t used;
++			sweet_gpu_wait_settled(20000);  /* boot 0097: backboardd looked before the GPU was kept */
++			used = strlcpy(env, "DYLD_INSERT_LIBRARIES=", size);
+ 			memcpy(env + used, sweet_inject_conf, liblen);
+ 			env[used + liblen] = 0;
+ 			return true;
+diff --git a/bsd/dev/sweet_adreno.c b/bsd/dev/sweet_adreno.c
+index 17b3d0f..7ecb096 100644
+--- a/bsd/dev/sweet_adreno.c
++++ b/bsd/dev/sweet_adreno.c
+@@ -2189,6 +2189,25 @@ static bool (*const steps[])(void) = {
+ 	step_gx_on, step_hfi, step_core_read, step_zap, step_core_space, step_core_start, step_core_commands, step_frame,
+ };
+ 
++/* 1 while the bring-up thread runs; kern_exec.c waits on it before starting a program that gets the GL bridge */
++static volatile int adreno_running;
++
++void sweet_gpu_wait_settled(uint32_t ms);
++
++void
++sweet_gpu_wait_settled(uint32_t ms)
++{
++	uint32_t waited = 0;
++	while (adreno_running && waited < ms) {
++		sleep_ms(50);
++		waited += 50;
++	}
++	if (waited) {
++		printf("SWEET GPU: a program waited %u ms for the GPU bring-up (%s)\n", waited,
++		    gpu_kept ? "kept on" : adreno_running ? "still running" : "not kept");
++	}
++}
++
+ static void
+ adreno_thread(void *arg __unused, wait_result_t wr __unused)
+ {
+@@ -2205,6 +2224,7 @@ adreno_thread(void *arg __unused, wait_result_t wr __unused)
+ 		printf("SWEET GPU: step %u done\n", step);
+ 	}
+ 	printf("SWEET GPU: finished\n");
++	adreno_running = 0;
+ 	(void)thread_terminate(current_thread());
+ 	thread_block(THREAD_CONTINUE_NULL);
+ }
+@@ -2222,8 +2242,11 @@ sweet_adreno_init(void)
+ 		printf("SWEET GPU: addresses are the a52q's; sweetboard=a52q required\n");
+ 		return;
+ 	}
++	adreno_running = 1;
+ 	if (kernel_thread_start(adreno_thread, NULL, &thread) == KERN_SUCCESS) {
+ 		thread_deallocate(thread);
++	} else {
++		adreno_running = 0;
+ 	}
+ }
+ #endif /* ARM64_BOARD_CONFIG_SWEET */

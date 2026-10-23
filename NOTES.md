@@ -697,3 +697,9 @@ DYLD_ variables from a job description (HackiOS comment) -> our launchd.plist En
 **Patch 0097:** kern_exec.c exec_extract_strings adds DYLD_INSERT_LIBRARIES=LIB for exec names in boot-arg
 `sweetinject=LIB,NAME[,NAME]` (HackiOS kern.exec_inject, boot-arg instead of sysctl). Use
 sweetinject=/redwood/lib/libsweet-gl.dylib,backboardd. Base xnu-8796.141.3 + 0042 (verified git apply).
+
+**Boot 0097 (22:09:39, + sweetinject=/redwood/lib/libsweet-gl.dylib,backboardd):** 🎉 injection WORKS: backboardd ran
+libsweet-gl (`|backboardd| sweet-gl: no RedwoodGPU service ...`) and its IOKit lookup of RedwoodGPU returned none -
+because the GPU bring-up (started 5 s after UFS init) finished AFTER backboardd started (log order).
+**Patch 0098:** exec of a program named in sweetinject waits (max 20 s) while the adreno bring-up thread runs
+(sweet_gpu_wait_settled in sweet_adreno.c, called from sweet_inject_env in kern_exec.c).

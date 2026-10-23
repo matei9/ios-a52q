@@ -1,0 +1,88 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index 68612db..b6bfbb4 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5568,10 +5568,60 @@ bad:
+  * Note:	The argument and environment vectors are user space pointers
+  *		to arrays of user space pointers.
+  */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++/*
++ * SWEET: boot-arg sweetinject=LIBRARY,NAME[,NAME...]: every program whose file name is one of the
++ * NAMEs is started with DYLD_INSERT_LIBRARIES=LIBRARY in its environment (the GPU's OpenGL ES
++ * bridge loader in backboardd). launchd refuses DYLD_ variables from a job description, which is
++ * why the kernel adds this one. After HackiOS's kern.exec_inject (OOSEX GANG,
++ * https://github.com/oosexgang/hackios-xnu-kernel, APSL 2.0), set by a boot-arg here.
++ */
++static char sweet_inject_conf[256];
++static int sweet_inject_read;
++
++static bool
++sweet_inject_env(struct image_params *imgp, char *env, size_t size)
++{
++	const char *name, *p, *comma;
++	size_t namelen, liblen;
++
++	if (!sweet_inject_read) {
++		if (!PE_parse_boot_arg_str("sweetinject", sweet_inject_conf, sizeof(sweet_inject_conf))) {
++			sweet_inject_conf[0] = 0;
++		}
++		sweet_inject_read = 1;
++	}
++	if (sweet_inject_conf[0] == 0 || imgp->ip_ndp == NULL ||
++	    (comma = strchr(sweet_inject_conf, ',')) == NULL) {
++		return false;
++	}
++	name = imgp->ip_ndp->ni_cnd.cn_nameptr;
++	namelen = imgp->ip_ndp->ni_cnd.cn_namelen;
++	liblen = (size_t)(comma - sweet_inject_conf);
++	for (p = comma; *p == ','; ) {
++		const char *word = ++p;
++		while (*p != 0 && *p != ',') {
++			p++;
++		}
++		if (namelen != 0 && (size_t)(p - word) == namelen && strncmp(word, name, namelen) == 0 &&
++		    liblen != 0 && liblen + sizeof("DYLD_INSERT_LIBRARIES=") < size) {
++			size_t used = strlcpy(env, "DYLD_INSERT_LIBRARIES=", size);
++			memcpy(env + used, sweet_inject_conf, liblen);
++			env[used + liblen] = 0;
++			return true;
++		}
++	}
++	return false;
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */
++
+ __attribute__((noinline))
+ static int
+ exec_extract_strings(struct image_params *imgp)
+ {
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	char sweet_inject[288];
++#endif
+ 	int error = 0;
+ 	int     ptr_size = (imgp->ip_flags & IMGPF_WAS_64BIT_ADDR) ? 8 : 4;
+ 	int new_ptr_size = (imgp->ip_flags & IMGPF_IS_64BIT_ADDR) ? 8 : 4;
+@@ -5741,6 +5791,22 @@ exec_extract_strings(struct image_params *imgp)
+ 		imgp->ip_envc++;
+ 	}
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	/* one more variable for the programs that get a library inserted (see sweet_inject_env) */
++	if (sweet_inject_env(imgp, sweet_inject, sizeof(sweet_inject))) {
++		error = exec_add_user_string(imgp, CAST_USER_ADDR_T(sweet_inject), UIO_SYSSPACE, TRUE);
++		if (error) {
++			goto bad;
++		}
++		if (imgp->ip_argspace < new_ptr_size) {
++			error = E2BIG;
++			goto bad;
++		}
++		imgp->ip_argspace -= new_ptr_size;
++		imgp->ip_envc++;
++	}
++#endif
++
+ 	/* Save space for envv[] NULL terminator */
+ 	if (imgp->ip_argspace < new_ptr_size) {
+ 		error = E2BIG;

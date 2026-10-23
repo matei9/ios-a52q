@@ -690,3 +690,10 @@ by TrustZone (no PAS shutdown first), CP started (CP_ME_INIT done, rptr 9), CP_S
 row ff 80 00 ff; "THE GPU IS KEPT ON for programs (RedwoodGPU service)". No UI acceleration yet: the steps ran 60 s +
 1.5 s pauses after boot, backboardd had already started and libsweet-gl found no RedwoodGPU. Next boot (no rebuild):
 `shim/out/a52q-boot-0096e.img` = 0096 + sweetgpudelay=5 sweetgpupause=0 so RedwoodGPU exists before backboardd.
+
+**Boot 0096e (21:56:40, sweetgpudelay=5 sweetgpupause=0):** GPU steps 1-21 done 5 s after boot, RedwoodGPU up before
+backboardd; but backboardd never looked up RedwoodGPU -> libsweet-gl.dylib was not inserted. Cause: launchd refuses
+DYLD_ variables from a job description (HackiOS comment) -> our launchd.plist EnvironmentVariables edit is ignored.
+**Patch 0097:** kern_exec.c exec_extract_strings adds DYLD_INSERT_LIBRARIES=LIB for exec names in boot-arg
+`sweetinject=LIB,NAME[,NAME]` (HackiOS kern.exec_inject, boot-arg instead of sysctl). Use
+sweetinject=/redwood/lib/libsweet-gl.dylib,backboardd. Base xnu-8796.141.3 + 0042 (verified git apply).

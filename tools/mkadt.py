@@ -2,7 +2,7 @@
 """Build the minimal Apple Device Tree that the SWEET xnu needs to boot.
 
 Only what the early boot path actually reads (see NOTES.md); every MMIO
-address comes from the sweet live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem]
+address comes from the sweet live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem] [--board sweet|a52q]
 """
 import hashlib, os, struct, sys
 
@@ -23,6 +23,12 @@ PANIC_LOG_SIZE = 0x100000
 # carve-out is in the low bank and the dynamic pools are limited below 4G.
 HIGH_PHYS_BASE = 0x100000000
 HIGH_MEM_SIZE = 0xfcc00000
+# --board a52q (Samsung A52, SM7125): RAM is c0000000-1_ffffffff, but Samsung's
+# sec_debug_rdx_bootdev carve-out sits at 0x1_00000000 + 0x5900000 (the low
+# bank also holds RKP/uH at 0xb02-0xb18 and sec_debug/log up to 0xb5000000).
+# Start on the next 32 MiB boundary above it and run to the end of DDR.
+A52Q_HIGH_PHYS_BASE = 0x106000000
+A52Q_HIGH_MEM_SIZE = 0x200000000 - A52Q_HIGH_PHYS_BASE
 # /arm-io children are relative to this; it must not be 0 (serial_init bails)
 SOC_BASE = 0x01000000
 
@@ -74,9 +80,12 @@ def node(name, props=(), children=()):
     return n
 
 
-def build(seed=None, qemu=False, highmem=False):
+def build(seed=None, qemu=False, highmem=False, board='sweet'):
     """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py)."""
-    phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
+    if board == 'a52q':
+        phys_base, mem_size = A52Q_HIGH_PHYS_BASE, A52Q_HIGH_MEM_SIZE
+    else:
+        phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
     # Carve the panic log off the top so the kernel never allocates over it.
     panic_base = phys_base + mem_size - PANIC_LOG_SIZE
     mem_size -= PANIC_LOG_SIZE
@@ -242,7 +251,9 @@ def build(seed=None, qemu=False, highmem=False):
 
 
 if __name__ == '__main__':
-    root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv)
+    board = sys.argv[sys.argv.index('--board') + 1] if '--board' in sys.argv else 'sweet'
+    assert board in ('sweet', 'a52q'), board
+    root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv, board=board)
     blob = adt.serialize(root)
     open(sys.argv[1], 'wb').write(blob)
     if '--dump' in sys.argv:

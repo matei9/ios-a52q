@@ -380,7 +380,7 @@ void shim_main(uint64_t dtb)
 	disp_init();	/* command mode panels: start autorefresh first */
 	stage = "loader";
 	con_clear(RED);
-	con_str("SHIM", "sweet milestone 4: xnu loader");
+	con_str("SHIM", "ios-sweet/a52q: xnu loader");
 	con_skip();
 	disp_report();
 	con_skip();

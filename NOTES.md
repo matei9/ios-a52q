@@ -20,7 +20,16 @@ Boot img header v2, page 4096, own DTB in boot.img (`dtb/a52q/boot_unpacked/dtb`
 
 **Step 1 (shim display probe):** `shim/display.c` - finds the SSPP fetching 0x9c000000, the active CTL, the PP with tear
 check; sets PP_AUTOREFRESH_CONFIG = BIT31|1 and CTL_START once. Build: `DTB=../dtb/a52q/boot_unpacked/dtb shim/build.sh`.
-Image `shim/out/a52q-shim-probe1.img` (sha256 d53c0abe...) flashed to boot 2026-10-23 ~17:27, rebooted. RESULT: pending.
+Image `shim/out/a52q-shim-probe1.img` (sha256 d53c0abe...) flashed to boot 2026-10-23 ~17:27.
+**RESULT (photo): Samsung ABL boots the shim fine; red console readable WITHOUT any kick.** cmd=0 (no PP has tear check
+enabled - ABL apparently leaves the panel refreshing; mechanism unknown, not needed now). CTL0 top=0x20000. SSPP0 (vig)
+addr 0x9c000000, size 0x0960x0438 (2400x1080), stride 0x10e0 = 4320, fmt 0x000237ff (a8r8g8b8 like sweet).
+UFS probe OK: ver 0x210, LUN0 lastlba 0x1da33ff (4K), GPT ok, userdata lba 0x304e00, 0x1a9e5 MiB (f2fs).
+
+**Step 2 (2026-10-23 evening):** `tools/mkadt.py --board a52q`: dram 0x106000000 .. 0x200000000 (panic log at 0x1fff00000).
+Kernel unchanged from sweet for first boot (CI run 39970409616 on matei9/ios-a52q). Boot-args plan: `sweettouch=0`, no
+`sweetusb` (QUSB2 PHY is 0x88e3000 on atoll vs 0x88e2000 sweet), cpus=6. Same touch SE (QUP a84000) as sweet but chip is
+STM FTS @0x49 -> new driver later. Root image being built by the user (sudo): research/ios16-root.img/.simg.
 
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 

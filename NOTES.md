@@ -616,3 +616,16 @@ UCHE_MODE 1<<21, hang 0xcfffff), RB rptr addr/cntl/base, SQE base, SQE_CNTL 1, C
 19 CP_SET_SECURE_MODE 0 + CP_MEM_WRITE 0x600dc0de; 20 2D solid fills (RB_CCU_CNTL 0x10<<21 = a618 bypass offset)
 into a 10 MB picture, pixels checked. CI run of 0089 cancelled while queued (GitHub capacity) to build 0089+0090 at once.
 Test with sweetgpu=20.
+
+**Boot 0090 (2026-10-23 20:50:34, sweetgpu=20; logs/live-a52q-0090.txt): steps 1-13 OK, 14 partly:**
+- 10: GMU memory mapped, SMMU SMR1 0x80000005 / S2CR1 1 / CB1 SCTLR 0x1027 taken. 11: RSCC + PDC programmed
+  (enable_pdc 0x80000001). 12: a618_gmu.bin 32768 bytes loaded and read back. 13: 🎉 **GMU FIRMWARE RUNS (0xbabeface)**.
+- 14: boot OOB acked (intr_info 0x40000000 = bit 30); 🎉 **GX GDSC 0xf8222000 = 3D core powered**; SPTPRAC status
+  0x28 (bit 3 on); then HFI_CTRL_STATUS 0xfe (not bit 0): "HFI does not start".
+  Cause: my queue header type was id<<8|prio<<16; kgsl QUEUE_HDR_TYPE is id | prio<<8.
+**Patch 0091:** queue type fix; new step 15 HFI v1 talk (kgsl hfi_start for legacy fw): INIT {seg 0, dump 0x60200000,
+16K, boot_state 1 = GMU_COLD_BOOT}, FW_VER (want 1.8), PERF_TBL v1 (8 GPU levels 0/267/355/430/565/650/800/825 MHz,
+votes ARC(pri gfx idx, sec mx idx, vlvl) = 0, (2,2,64), (3,2,128), (4,2,192), (5,2,256), (6,3,320), (7,3,384), (8,3,416);
+GMU 200 MHz cx (2,2,64)), minimal BW table (1 level, no commands; refusal non-fatal), TEST; then register DCVS
+(ACK_OPTION 0, PERF_SETTING idx|3<<28, sweetgpuperf default 1 = 267 MHz, OOB dcvs = set bit 23 ack bit 31, clear by
+writing bit 31), OOB gpu (bit 16 / ack 24). Steps after shift by one: use sweetgpu=21.

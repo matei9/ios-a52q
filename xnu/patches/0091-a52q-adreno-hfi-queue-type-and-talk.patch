@@ -1,0 +1,264 @@
+diff --git a/bsd/dev/sweet_adreno.c b/bsd/dev/sweet_adreno.c
+index 882b1eb..62814bf 100644
+--- a/bsd/dev/sweet_adreno.c
++++ b/bsd/dev/sweet_adreno.c
+@@ -31,12 +31,14 @@
+  *  13  writes  the GMU's configuration (a6xx_gmu_fw_start) and lets it out of reset: 0xbabeface
+  *  14  writes  GX rail vote by registers (qcom,gpu-quirk-hfi-use-reg), OOB boot_slumber,
+  *              SPTPRAC power on, HFI queues started: the 3D core gets power
+- *  15  reads   the 3D core: RBBM and GBIF registers (a615 family: GBIF)
+- *  16  asks    TrustZone for the zap shader (a615_zap, PAS 13): init image, memory 0x93b15000, auth
+- *  17  writes  SMMU context 0 for the 3D core (stream 0): ring, SQE microcode a630_sqe.fw, scratch
+- *  18  writes  the a618 init of kgsl a6xx_start, the ring and SQE base; starts the CP; CP_ME_INIT
+- *  19  commands the core out of secure mode and to write a word into our memory
+- *  20  commands a 2D fill of a picture in our memory (HackiOS step 22), checked pixel by pixel
++ *  15  talks   to the GMU over HFI (legacy v1, kgsl hfi_start): INIT, FW_VER, DCVS table v1,
++ *              bandwidth table, TEST; then the GPU clock by registers (DCVS OOB) and OOB gpu
++ *  16  reads   the 3D core: RBBM and GBIF registers (a615 family: GBIF)
++ *  17  asks    TrustZone for the zap shader (a615_zap, PAS 13): init image, memory 0x93b15000, auth
++ *  18  writes  SMMU context 0 for the 3D core (stream 0): ring, SQE microcode a630_sqe.fw, scratch
++ *  19  writes  the a618 init of kgsl a6xx_start, the ring and SQE base; starts the CP; CP_ME_INIT
++ *  20  commands the core out of secure mode and to write a word into our memory
++ *  21  commands a 2D fill of a picture in our memory (HackiOS step 22), checked pixel by pixel
+  * The firmware reaches the kernel in the boot payload (tools/mkpayload.py --firmware fw-a52q/gpu),
+  * as /chosen/memory-map "SweetFirmware": it is the phone's own and never in git.
+  *
+@@ -964,7 +966,8 @@ step_gmu_space(void)
+ 	for (unsigned i = 0; i < 4; i++) {
+ 		t->queue[i].status = i < 3;
+ 		t->queue[i].start = GMU_HFI_ADDRESS + HFI_QUEUE_AT(i);
+-		t->queue[i].type = (uint32_t)ids[i] << 8 | (uint32_t)priority[i] << 16;      /* QUEUE_HDR_TYPE */
++		/* kgsl QUEUE_HDR_TYPE(id, prio, 0, 0) = id | prio << 8 (boot 0090: id << 8 made HFI_CTRL_STATUS 0xfe) */
++		t->queue[i].type = (uint32_t)ids[i] | (uint32_t)priority[i] << 8;
+ 		t->queue[i].words = 4096 / 4;
+ 		t->queue[i].rx_wm = t->queue[i].tx_wm = t->queue[i].rx_req = 1;
+ 	}
+@@ -1221,7 +1224,173 @@ step_gx_on(void)
+ 	return !space_faulted(&gmu_space);
+ }
+ 
+-/* ---- step 15: the 3D core's first registers ---- */
++/* ---- step 15: talk to the GMU (kgsl_hfi.c, legacy HFI v1 for a615-family firmware) ---- */
++
++#define HFI_MSG_CMD             0
++#define HFI_V1_MSG_ACK          2
++#define H2F_MSG_INIT            0
++#define H2F_MSG_FW_VER          1
++#define H2F_MSG_BW_VOTE_TBL     3
++#define H2F_MSG_PERF_TBL        4
++#define H2F_MSG_TEST            5
++#define GMU_DCVS_ACK_OPTION     KGSL_GMU(0x1cbfc)
++#define GMU_DCVS_PERF_SETTING   KGSL_GMU(0x1cbfd)
++#define GMU_DCVS_BW_SETTING     KGSL_GMU(0x1cbfe)
++#define GMU_DCVS_RETURN         KGSL_GMU(0x1cbff)
++#define OOB_GPU                 0
++#define OOB_DCVS                7
++#define ARC_VOTE(pri, sec, vlvl) ((uint32_t)(vlvl) << 16 | (uint32_t)(sec) << 8 | (uint32_t)(pri))
++
++static uint32_t hfi_seq;
++static uint32_t hfi_result[8];
++
++static void
++oob_clear(unsigned request)
++{
++	put(&gmu, "host2gmu_intr_set (oob clear)", GMU_HOST2GMU_INTR_SET, 1u << (24 + request));
++}
++
++/* One message into queue 0, the doorbell, and the GMU's answer from queue 1 (kgsl hfi_send_cmd). */
++static bool
++hfi_send(const char *what, uint32_t id, uint32_t *message, uint32_t words)
++{
++	struct hfi_table *t = (struct hfi_table *)gmu_hfi.memory;
++	uint32_t *cmdq = (uint32_t *)(gmu_hfi.memory + HFI_QUEUE_AT(0));
++	uint32_t *msgq = (uint32_t *)(gmu_hfi.memory + HFI_QUEUE_AT(1));
++	message[0] = (HFI_MSG_CMD << 16 | words << 8 | id) | (++hfi_seq & 0xfff) << 20;
++	to_memory(gmu_hfi.memory, gmu_hfi.size);
++	uint32_t write = t->queue[0].write;
++	for (uint32_t i = 0; i < words; i++) {
++		cmdq[write] = message[i];
++		write = (write + 1) % t->queue[0].words;
++	}
++	t->queue[0].write = write;
++	to_memory(gmu_hfi.memory, gmu_hfi.size);
++	printf("SWEET GPU: %u: HFI %s: %u words, header %#x\n", step, what, words, message[0]);
++	wr(gmu.base + GMU_HOST2GMU_INTR_SET, 1);
++	if (!wait_for(&gmu, GMU_GMU2HOST_INTR_INFO, 1, 1, 200)) {
++		printf("SWEET GPU: %u: HFI %s: no answer (intr_info %#x, cmdq read %u write %u)\n", step, what,
++		    rd(gmu.base + GMU_GMU2HOST_INTR_INFO), t->queue[0].read, t->queue[0].write);
++		return false;
++	}
++	wr(gmu.base + GMU_GMU2HOST_INTR_CLR, 1);
++	bool acked = false;
++	for (int n = 0; n < 8; n++) {
++		to_memory(gmu_hfi.memory, gmu_hfi.size);
++		uint32_t read = t->queue[1].read;
++		if (read == t->queue[1].write) {
++			break;
++		}
++		uint32_t header = msgq[read], size = (header >> 8) & 0xff, got[16] = { 0 };
++		for (uint32_t i = 0; i < size; i++) {
++			if (i < 16) {
++				got[i] = msgq[read];
++			}
++			read = (read + 1) % t->queue[1].words;
++		}
++		t->queue[1].read = read;
++		to_memory(gmu_hfi.memory, gmu_hfi.size);
++		printf("SWEET GPU: %u: HFI from the GMU: %#x %#x %#x %#x %#x\n", step, got[0], got[1], got[2], got[3], got[4]);
++		if (((header >> 16) & 0xf) == HFI_V1_MSG_ACK && got[1] == message[0]) {
++			memcpy(hfi_result, got, sizeof(hfi_result));
++			acked = true;
++		}
++	}
++	if (!acked) {
++		printf("SWEET GPU: %u: HFI %s: no acknowledgement among the answers\n", step, what);
++		return false;
++	}
++	if (hfi_result[2] != 0) {
++		printf("SWEET GPU: %u: HFI %s: the GMU answers error %#x\n", step, what, hfi_result[2]);
++		return false;
++	}
++	return true;
++}
++
++static bool gpu_clocked;
++
++static bool
++step_hfi(void)
++{
++	uint32_t perf = 1;      /* gpu level 1 = 267 MHz */
++	if (!gx_on) {
++		printf("SWEET GPU: %u: needs step 14\n", step);
++		return false;
++	}
++	(void)PE_parse_boot_argn("sweetgpuperf", &perf, sizeof(perf));
++	announce("HFI: INIT (crash dump buffer, cold boot) and FW_VER (kgsl wants 1.8 for a618)");
++	uint32_t init[5] = { 0, 0, GMU_DUMP_ADDRESS, 0x4000, 1 /* kgsl_gmu_core.h GMU_COLD_BOOT */ };
++	if (!hfi_send("init", H2F_MSG_INIT, init, 5)) {
++		return false;
++	}
++	uint32_t ver[2] = { 0, 1u << 28 | 8u << 16 };
++	if (!hfi_send("fw_ver", H2F_MSG_FW_VER, ver, 2)) {
++		return false;
++	}
++	printf("SWEET GPU: %u: GMU firmware version %#x (major %u minor %u)\n", step, hfi_result[3], hfi_result[3] >> 28,
++	    (hfi_result[3] >> 16) & 0xfff);
++
++	/*
++	 * kgsl rpmh_arc_votes_init + setup_volt_dependency_tbl with this phone's cmd-db (boot 0088):
++	 * gfx.lvl 0 16 64 128 192 256 320 384 416, mx.lvl 0 16 256 384, cx.lvl 0 16 64 128 192 256 384;
++	 * GPU levels ascending (DT qcom,gpu-pwrlevels reversed), voltage from gpucc-sdmmagpie rate_max.
++	 */
++	static const uint32_t gpu_khz[8] = { 0, 267000, 355000, 430000, 565000, 650000, 800000, 825000 };
++	static const uint32_t gx_vote[8] = {
++		0, ARC_VOTE(2, 2, 64), ARC_VOTE(3, 2, 128), ARC_VOTE(4, 2, 192), ARC_VOTE(5, 2, 256),
++		ARC_VOTE(6, 3, 320), ARC_VOTE(7, 3, 384), ARC_VOTE(8, 3, 416),
++	};
++	uint32_t perf_table[3 + 2 * 16 + 2 * 4] = { 0 };
++	perf_table[1] = 8;
++	perf_table[2] = 2;
++	for (unsigned i = 0; i < 8; i++) {
++		perf_table[3 + 2 * i] = gx_vote[i];
++		perf_table[3 + 2 * i + 1] = gpu_khz[i];
++	}
++	perf_table[3 + 32 + 2] = ARC_VOTE(2, 2, 64);   /* GMU 200 MHz: VDD_MIN -> cx 64 (idx 2), mx 256 (idx 2) */
++	perf_table[3 + 32 + 3] = 200000;
++	announce("HFI: the DCVS table v1 (8 GPU levels 0..825 MHz, 2 GMU levels)");
++	if (!hfi_send("perf table", H2F_MSG_PERF_TBL, perf_table, sizeof(perf_table) / 4)) {
++		return false;
++	}
++	/* hfi_bwtable_cmd: 6 + 6 + 2*6 + 8 + 16*8 words; one level and no bus commands (DDR is up for the CPU) */
++	uint32_t bw_table[6 + 6 + 12 + 8 + 128] = { 0 };
++	bw_table[1] = 1;
++	announce("HFI: a minimal bandwidth table (one level, no bus commands)");
++	if (!hfi_send("bw table", H2F_MSG_BW_VOTE_TBL, bw_table, sizeof(bw_table) / 4)) {
++		printf("SWEET GPU: %u: the bandwidth table is refused; going on (bus votes stay as they are)\n", step);
++	}
++	uint32_t test[2] = { 0, 0 };
++	announce("HFI: TEST (hfi-use-reg quirk: no more messages until the next boot)");
++	if (!hfi_send("test", H2F_MSG_TEST, test, 2)) {
++		return false;
++	}
++	announce("the GPU clock by register DCVS (kgsl a6xx_gmu_dcvs_nohfi), then OOB gpu to keep it awake");
++	put(&gmu, "dcvs_ack_option", GMU_DCVS_ACK_OPTION, 0);
++	put(&gmu, "dcvs_perf_setting", GMU_DCVS_PERF_SETTING, (perf & 0xff) | 3u << 28);
++	put(&gmu, "dcvs_bw_setting", GMU_DCVS_BW_SETTING, 0);
++	bool dcvs = oob_set(OOB_DCVS);
++	uint32_t ret = get(&gmu, "dcvs_return", GMU_DCVS_RETURN);
++	oob_clear(OOB_DCVS);
++	if (!dcvs) {
++		printf("SWEET GPU: %u: the GMU does not acknowledge the DCVS OOB\n", step);
++		return false;
++	}
++	get(&gpucc, "pll0 mode", GPUCC_PLL0_MODE);
++	get(&gpucc, "pll0 l", GPUCC_PLL0_MODE + 4);
++	get(&gpucc, "gx_gfx3d cbcr", 0x1054);
++	get(&gpucc, "gx_gfx3d rcg cfg", 0x101c + 4);
++	if (!oob_set(OOB_GPU)) {
++		printf("SWEET GPU: %u: the GMU does not acknowledge OOB gpu\n", step);
++		return false;
++	}
++	gpu_clocked = true;
++	printf("SWEET GPU: %u: THE GMU TALKS: tables taken, GPU level %u (%u kHz) asked, return %#x\n", step, perf,
++	    gpu_khz[perf & 7], ret);
++	return true;
++}
++
++/* ---- step 16: the 3D core's first registers ---- */
+ 
+ static struct block core = { "core", 0x05000000, 0x40000 };
+ #define GPU_WORD(n)             (4u * (n))
+@@ -1247,7 +1416,7 @@ step_core_read(void)
+ 	return true;
+ }
+ 
+-/* ---- step 16: TrustZone and the zap shader ---- */
++/* ---- step 17: TrustZone and the zap shader ---- */
+ 
+ /*
+  * HackiOS steps 11, 12, 19 (qcom_scm.c PAS calls; GPU = image 13). On this phone's kernel the
+@@ -1365,7 +1534,7 @@ step_zap(void)
+ 	return true;
+ }
+ 
+-/* ---- step 17: the 3D core's memory: SMMU context 0, stream 0 ---- */
++/* ---- step 18: the 3D core's memory: SMMU context 0, stream 0 ---- */
+ 
+ #define PTE_UNPRIVILEGED        (1ull << 6)
+ #define PTE_READ_ONLY           (1ull << 7)
+@@ -1413,7 +1582,7 @@ step_core_space(void)
+ 	return core_space_on;
+ }
+ 
+-/* ---- step 18: the 3D core initialized, its command processor started ---- */
++/* ---- step 19: the 3D core initialized, its command processor started ---- */
+ 
+ #define RBBM_INT_0_STATUS       GPU_WORD(0x0201)
+ #define CP_RB_BASE              GPU_WORD(0x0800)
+@@ -1560,7 +1729,7 @@ step_core_start(void)
+ 	return true;
+ }
+ 
+-/* ---- step 19: out of secure mode; a word written on command ---- */
++/* ---- step 20: out of secure mode; a word written on command ---- */
+ 
+ static bool core_free;
+ 
+@@ -1591,7 +1760,7 @@ step_core_commands(void)
+ 	return core_free;
+ }
+ 
+-/* ---- step 20: a picture filled by the 2D engine (HackiOS step 22, Mesa fd6_clear_surface) ---- */
++/* ---- step 21: a picture filled by the 2D engine (HackiOS step 22, Mesa fd6_clear_surface) ---- */
+ 
+ #define RB_CCU_CNTL             0x8e07
+ #define GRAS_2D_BLIT_CNTL       0x8400
+@@ -1687,7 +1856,7 @@ step_frame(void)
+ static bool (*const steps[])(void) = {
+ 	NULL, step_outside, step_fuses, step_gpucc, step_cx_power, step_clocks, step_first_words,
+ 	step_rscc, step_pdc, step_smmu, step_gmu_space, step_rpmh_ucode, step_gmu_firmware, step_gmu_start,
+-	step_gx_on, step_core_read, step_zap, step_core_space, step_core_start, step_core_commands, step_frame,
++	step_gx_on, step_hfi, step_core_read, step_zap, step_core_space, step_core_start, step_core_commands, step_frame,
+ };
+ 
+ static void

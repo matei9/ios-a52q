@@ -1,5 +1,13 @@
 # A52q port (Samsung Galaxy A52, SM-A525F, SM7125 "atoll") - started 2026-10-23
 
+**Active GPU handoff (2026-10-23, latest):** on-phone boot **0099**; BGRA negotiation now
+works (no 0x506), but backboardd crashes on a bogus surface returned by unimplemented wrapper
+selector 6. Fix **0100**, commit `5a761f4`, CI **40014639866** succeeded; image ready, awaiting TWRP and per-flash approval. 0099 commit `bb21e0d`,
+CI **40012845417** succeeded. Live console: `logs/live-a52q-0099.txt`, UDP listener session 63005.
+See final handoff entries below for exact crash symbols, image hashes, approval and boot results.
+Next: obtain required per-flash approval, put phone in TWRP, flash 0100 and boot. Do not claim
+GPU UI success yet. Keep `gpu_cached=1` and injection args from 0098c.
+
 Fork: github.com/matei9/ios-a52q (ONLY this repo may be used; local `origin` push URL is disabled, remote `a52q`).
 Kernel source for the device (LineageOS): ~/sm7125. IPSW (iPhone10,3 16.7.16 20H392) in repo dir (gitignored).
 
@@ -750,3 +758,15 @@ incorrectly returns success with a zero result for that unimplemented create-lik
 IOSurface.framework return NULL rather than constructing an invalid object. Its disassembly at
 0x1a398678c branches to a NULL return on method failure. This fixes a proven driver contract bug;
 CA's handling/fallback and UI rendering still require another boot test. No second flash approved yet.
+
+**0100 artifact ready (2026-10-23):** CI run 40014639866 SUCCESS; patch 0100 applied,
+only the four expected blacktop skips. Kernel contains "unsupported wrapper". No test jobs added.
+`xnu/out-0100/kernel.development.sweet` sha256
+443838649d95ddf64f5dede5ba6fc6c84233b3a04e4bddc2c11e2f16e6eb47b1.
+`shim/out/a52q-boot-0100.img` 17,416,192 bytes, sha256
+dd62836c1471b285ea9fc470359cd39def0568cbc0113045e4ac45c909490bb0.
+Args same as 0099. NOT flashed: asked user for this second per-step approval and to enter TWRP.
+User prefers fewer Actions runs and fixes over tests; no additional test files/jobs introduced.
+0099 console listener remains running (session 63005); the phone is still running 0099.
+The CA retain_image disassembly also checks the wrapper for NULL (0x1884088a4), skipping the
+wrap_buffer call when absent. This supports the 0100 fix; runtime result is still unverified.

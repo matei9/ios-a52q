@@ -1,3 +1,27 @@
+# A52q port (Samsung Galaxy A52, SM-A525F, SM7125 "atoll") - started 2026-10-23
+
+Fork: github.com/matei9/ios-a52q (ONLY this repo may be used; local `origin` push URL is disabled, remote `a52q`).
+Kernel source for the device (LineageOS): ~/sm7125. IPSW (iPhone10,3 16.7.16 20H392) in repo dir (gitignored).
+
+**Observed (TWRP adb, 2026-10-23):** bootloader A525FXXSCFYF1, unlocked (orange), vbmeta flags=3 (verification off).
+Boot img header v2, page 4096, own DTB in boot.img (`dtb/a52q/boot_unpacked/dtb`), live FDT `dtb/a52q/live.dtb/.dts`.
+- Same as sweet: GICD 0x17a00000, UFS 0x1d84000 (userdata = sda31 on LUN0, ~106 GiB), DWC3 a600000,
+  cont splash fb 0x9c000000 size 0x9e4000 (1080x2400), PSHOLD 0xc264000, IMEM restart_reason 0x146aa65c,
+  CPUs MPIDR 0x0..0x700 (6 A55 + 2 A76).
+- Different: panel S6E3FC3 is **DSI command mode** (needs MDP kick/autorefresh; MDP 0xae00000, CTL 0x2000/0x2200/0x2400,
+  PP 0x71000/0x71800, SSPP vig 0x5000 dma 0x25000/0x27000/0x29000). Samsung RKP/uH carve-outs 0xb0200000..0xb1800000,
+  sec_debug/log 0xb4400000..0xb5000000, modem_shared 0xb5000000+0x6000000 -> sweet's physBase 0xb0000000 is NOT usable,
+  use >=0xc0000000 (RAM c0000000-1ffffffff; sec_debug_rdx_bootdev 0x100000000+0x5900000).
+  Touch: STM FTS (fts_touch) i2c 0x49 on QUP a84000 (i2c-23). Vol-up = gpio-keys (TLMM), power/vol-down via pm6150 PON.
+- No `fastboot boot` on Samsung: flash test images to `boot` (from TWRP: adb push + dd, or TWRP fastbootd `fastboot flash boot`).
+  TWRP stays in recovery (Vol-Up + Power). User approved flashing anything on the phone (2026-10-23).
+- Backups (verified sha256 vs device): `backup/a52q/` efs sec_efs persist modemst1/2 fsg fsc param boot dtbo vbmeta
+  vbmeta_system recovery misc steady persistent.
+
+**Step 1 (shim display probe):** `shim/display.c` - finds the SSPP fetching 0x9c000000, the active CTL, the PP with tear
+check; sets PP_AUTOREFRESH_CONFIG = BIT31|1 and CTL_START once. Build: `DTB=../dtb/a52q/boot_unpacked/dtb shim/build.sh`.
+Image `shim/out/a52q-shim-probe1.img` (sha256 d53c0abe...) flashed to boot 2026-10-23 ~17:27, rebooted. RESULT: pending.
+
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
 ## Agent handoff / active work (2026-10-15, latest)

@@ -11,6 +11,7 @@
 #include "mmu.h"
 #include "loader.h"
 #include "ufs.h"
+#include "display.h"
 
 #define IMEM_RESTART_REASON	0x146aa65cUL	/* qcom,msm-imem restart_reason@65c */
 #define RESTART_BOOTLOADER	0x77665500U
@@ -375,9 +376,13 @@ void shim_main(uint64_t dtb)
 	struct mmu_info mi;
 
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
+	stage = "display";
+	disp_init();	/* command mode panels: start autorefresh first */
 	stage = "loader";
 	con_clear(RED);
 	con_str("SHIM", "sweet milestone 4: xnu loader");
+	con_skip();
+	disp_report();
 	con_skip();
 	const char *why = loader_boot(dtb);
 	con_str("LOADER", why);

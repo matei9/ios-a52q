@@ -47,6 +47,15 @@ touch it), gpio9 cfg 1 (pull-down) io 0.
   30 61 00, force cal 0x13 (echo 43 13), clear 0x62, scan A0 00 01. Poll READ_ONE_EVENT 0x60 every 10 ms; coordinate
   event byte0 = eid(0)|tid<<2|action<<6, x = b1<<4|b3>>4, y = b2<<4|b3&15; scaled from `sweettouchmax` (default 4096,
   from DT stm,max_coords 0xfff - UNVERIFIED, check TWRP `getevent -p`). TX limit raised to 8 bytes.
+  TWRP `getevent -p` sec_touchscreen: ABS_MT_POSITION_X/Y max 4095 (declared range; raw corner values not yet captured).
+- CI run 39971816163 OK (7m22s) -> `xnu/out-0082/kernel.development.sweet` (contains the STM strings).
+
+**First iOS boot attempt (2026-10-23 17:51:11 EEST):** root built from the IPSW (`research/ios16-root.img/.simg`,
+mkiosroot + fsck (exit 1 = known "minor repair" quirk) + sweet-root-tweaks) flashed to userdata via TWRP fastbootd
+(`fastboot flash userdata research/ios16-root.simg`, 47/47 OKAY, 308 s; log research/flash-userdata-a52q.log).
+Boot image `shim/out/a52q-boot-0082.img` = shim + kernel 0082 + `shim/out/a52q.adt` (--board a52q), cmdline =
+README cmdline + `sweetboard=a52q sweetusb=2` (cpus=6), flashed to boot via fastbootd. RESULT: pending.
+Android data is gone (approved); stock boot in backup/a52q/boot.img.
 
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 

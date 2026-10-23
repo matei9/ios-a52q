@@ -1,0 +1,14 @@
+diff --git a/bsd/dev/sweet_adreno.c b/bsd/dev/sweet_adreno.c
+index d9c1888..59ddc98 100644
+--- a/bsd/dev/sweet_adreno.c
++++ b/bsd/dev/sweet_adreno.c
+@@ -1291,7 +1291,8 @@ hfi_send(const char *what, uint32_t id, uint32_t *message, uint32_t words)
+ 		t->queue[1].read = read;
+ 		to_memory(gmu_hfi.memory, gmu_hfi.size);
+ 		printf("SWEET GPU: %u: HFI from the GMU: %#x %#x %#x %#x %#x\n", step, got[0], got[1], got[2], got[3], got[4]);
+-		if (((header >> 16) & 0xf) == HFI_V1_MSG_ACK && got[1] == message[0]) {
++		/* kgsl receive_ack_cmd: HDR_CMP_SEQNUM, the GMU echoes the request's sequence number (boot 0091: 0x100000) */
++		if (((header >> 16) & 0xf) == HFI_V1_MSG_ACK && (got[1] >> 20) == (message[0] >> 20)) {
+ 			memcpy(hfi_result, got, sizeof(hfi_result));
+ 			acked = true;
+ 		}

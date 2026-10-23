@@ -640,3 +640,11 @@ CP_INDIRECT_BUFFER submission, msm GET_PARAM answers for a618 (chip 0x06010800, 
 sweetgpukeep=1 after step 21 passes -> RedwoodGPUStart(). Not ported yet: per-submission timing, gpu_recover.
 Stage 6 (userland: Mesa 25.0.7 freedreno for Darwin + redwood-drm + eagl.c injected into backboardd) needs an iOS
 cross toolchain (theos + iPhoneOS 16.x SDK) on the build PC.
+
+**Boot 0091 (21:07:37 and again 21:13:54, sweetgpu=21):** steps 1-14 OK incl. 🎉 **HFI queues up** (queue type fix)
+and GX power on; hfi_version_info 0 (legacy v1). Step 15 INIT answered by the GMU: `0x2047e 0x100000 0 0xe550e55 0`
+= V1 ACK (type 2, id 0x7e, 4 words), echoed header 0x100000 (= seqnum 1 only), error 0 = SUCCESS; my code compared the
+whole header and called it "no acknowledgement". (Note: the first watcher reported "in TWRP again" falsely - it checked
+adb right after `adb reboot` while the old connection was still listed; the persistent log on userdata showed the 0090
+boot because the 0091 run's lines came over USB.)
+**Patch 0093:** match HFI ACKs by sequence number (kgsl HDR_CMP_SEQNUM). Next boot: sweetgpu=21 sweetgpukeep=1.

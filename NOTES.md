@@ -578,3 +578,16 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
 read-only steps 7 RSCC (kgsl word w -> GMU byte 4*(w-0x1a800): RSC_STATUS0 0x23404, SLAVE_ID 0x2340b, SEQ_MEM 0x23580...),
 8 PDC (cfg 0xb290000: ENABLE 0x1140w, SEQ_START 0x1148w, TCS1 0x1572w; seq 0xb490000), 9 SMMU 0x5040000 (IDR0-7, SMR/S2CR,
 CBAR, CB0). Boot next with sweetgpu=9.
+
+**Boot 0088 (20:10:14, sweetgpu=9; log logs/live-a52q-0088.txt): GPU steps 1-9 ALL OK, system boots normally.**
+- cmd-db 0x80820000 size 0x1040; gfx.lvl 0x30050 levels 0 16 64 128 192 256 320 384 416; cx.lvl 0x30000; mx.lvl 0x30010.
+- gpucc as ABL left it: cx/gx gdscr 0x222001 (collapsed), PLL0/1 off, gmu rcg cfg 0, cx_gmu off. CX on -> 0xf8222000;
+  gmu_clk_src cfg 0x602 (200 MHz); cx_apb stays "off" (not relied on), cx_snoc_dvm reads 0.
+- GMU: cm3_sysreset 1 (held in reset), cfg 0x52, rpmh_power_state 0xf, sptprac 0xd4, ao_gpu_cx_busy 0x30000000;
+  ALWAYS-ON COUNTER 19198343 Hz -> GPU BLOCK ALIVE. DTCM has stale data.
+- RSCC: status0 0, slave_id 1, seq_mem all 0, tcs0 status 1 -> kgsl's _load_gmu_rpmh_ucode must run. PDC cfg/seq all 0.
+- SMMU 0x5040000 directly readable (no hypervisor trap seen): scr0 0x200626, idr0 0x48016605 (5 SMRs), idr1 0x20008005
+  (4K pages, 5 context banks, numpage -> CB0 at 0x5048000 = kgsl qcom,gpu-offset 0x48000), all S2CR 0x200ff (fault),
+  CBs unconfigured.
+NEXT (stage 3, writes): RSCC/PDC programming (adreno_a6xx_gmu.c _load_gmu_rpmh_ucode), SMMU context with our page
+tables, GMU firmware load (fw-a52q/gpu/a618_gmu.bin, must reach the kernel via the boot payload, not git) + boot + HFI.

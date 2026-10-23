@@ -1,13 +1,13 @@
 # A52q port (Samsung Galaxy A52, SM-A525F, SM7125 "atoll") - started 2026-10-23
 
-**Active GPU handoff (2026-10-23, latest):** on-phone **0101** (commit b03d5bf, CI
-40016396431 SUCCESS, flashed with user approval). Mapping exhaustion fixed: Mesa reports zero
-GL errors over first 30 frames, continued submissions and touch events. User still sees red
-background; unlock gives black screen. Log pinpoints GPU SMMU fault **0x15380**, done122/last125.
-**0102** corrects GMEM_BASE GET_PARAM: driver told Mesa zero but hardware UCHE GMEM is at
-0x100000. Shared base/size constants now drive both hardware and API. Next CI + boot pending.
-Keep gpu_cached=1 and injection args as 0098c. Live console `logs/live-a52q-0101.txt`, listener
-session 85448. Do not claim usable GPU UI yet. See final entries for results/hashes.
+**Active GPU handoff (2026-10-23, latest):** on-phone **0102** (dca3e52, CI40018461202
+SUCCESS, approved flash). User reaches HOME SCREEN, but icons missing and laggy. GMEM fault at
+0x15380 gone; frame summaries show0 GL errors, sustained submissions (298/5s). Later another
+GPU stall appears at submission922/done916, no SMMU fault. **0103** ports IOSurfaceAddress
+wrapping: old driver replaced caller-owned image pixels with blank allocations. Read-only
+fallback, precise lengths, prepare/complete lifetime, cached kernel mapping. Next CI/boot pending.
+Keep gpu_cached=1 and injection args. Log `logs/live-a52q-0102.txt`, listener10482.
+Do not claim fully usable UI yet. See final entries for full results.
 
 Fork: github.com/matei9/ios-a52q (ONLY this repo may be used; local `origin` push URL is disabled, remote `a52q`).
 Kernel source for the device (LineageOS): ~/sm7125. IPSW (iPhone10,3 16.7.16 20H392) in repo dir (gitignored).
@@ -809,3 +809,27 @@ instead of GMEM. Qualcomm adreno.c agrees: UCHE base ALIGN(gmem_size,1MiB), expo
 virtual-address property. Patch0102 reports 0x100000 and shares constants with register init.
 This is a confirmed API/register mismatch; validation of its effect on the display is pending.
 No test files/jobs added; user wants fewer CI runs and actual fixes.
+
+**0102 build/flash (2026-10-23):** commit dca3e52; GitHub run40018461202 SUCCESS,
+0102 applied, only four known blacktop skips. Image `shim/out/a52q-boot-0102.img`, 17,481,728
+bytes, sha256 4d90c644568ba869fcd4a047ed705662beb410adc90b4370ad9fcc5d47d80262.
+Kernel `xnu/out-0102/kernel.development.sweet` sha256
+0b90ce457e9350b738d5d4afb4a796a4319bf5cc9786c76b86037060e7646cb1.
+User explicitly approved ("yes ofc"). TWRP dd wrote4268x4096 bytes, exit0; sync+adb reboot.
+Args same as0101. No userdata/recovery writes. Old logger85448 stopped; new logger10482
+captures `logs/live-a52q-0102.txt`. Boot result pending.
+
+**Boot0102 result (2026-10-23):** user: "now it gets to home screen but icons arent loading
+and it lags". First30 frames0 GL errors; then 239 submissions/14.9s and298/5s. GMEM low-address
+SMMU fault gone. Later GPU stalls922(last)/916(done), rptr2034/wptr2185, status0xee0d95,
+CP fault/int/protect0, IB1 0x20450000+3947, IB2 0x20498000+0; no SMMU fault printed.
+Do not equate this to complete GPU success. Icons logged as180x180 format0 IOSurfaces.
+**0103 icons fix:** SweetSurface::create ignored IOSurfaceAddress and always allocated zeroed
+pixels. HackiOS handles this through prepared caller memory. Ported with IOMemoryDescriptor
+withAddressRange in fTask; InOut then read-only Out fallback; exact declared alloc length,
+geometry/overflow validation, complete on release. Kernel mapping uses mapCache (cached for
+caller buffers), avoiding >4GiB WC cache-attribute path; physical framebuffer retains WC.
+Existing pixels cannot have their wide format relabelled, so wrapped wide requests rejected.
+Partial/ranged wrappers remain unsupported. Selector6/7 refusal from0100 retained; fallback
+IOSurfaceCreate with address now works. Patch applies to complete0102 tree. No test files/jobs.
+0103 effect on icons and the later GPU stall still unverified; performance remains to assess.

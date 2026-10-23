@@ -1,0 +1,102 @@
+--- a/iokit/Kernel/arm/SweetSurface.h
++++ b/iokit/Kernel/arm/SweetSurface.h
+@@ -35,12 +35,13 @@
+ 	uint32_t cacheMode, planeCount, parentID;
+ 	struct sweet_surface_plane planes[SWEET_SURFACE_MAX_PLANES];
+ 
++	bool                      memoryPrepared; /* caller memory held with prepare() */
+ 	IOMemoryDescriptor       *memory;       /* pixels (buffer or physical) */
+ 	IOOptionBits              mapCache;     /* cache mode for user mappings */
+ 	IOBufferMemoryDescriptor *state;        /* shared state page, read-only for users */
+ 	IOMemoryMap              *kernelMap;    /* lazily created for kernel copies */
+ 
+-	bool init() APPLE_KEXT_OVERRIDE { return OSObject::init(); }
++	bool init() APPLE_KEXT_OVERRIDE { memoryPrepared = false; return OSObject::init(); }
+ 	void free() APPLE_KEXT_OVERRIDE;
+ 
+ 	/* Kernel address of the pixels (mapped on first use), or 0. */
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -84,6 +84,9 @@
+ 		OSAddAtomic64(-(SInt64)allocSize, (volatile SInt64 *)&sweet_surface_wired);
+ 	}
+ 	OSSafeReleaseNULL(kernelMap);
++	if (memoryPrepared && memory != NULL) {
++		memory->complete();
++	}
+ 	OSSafeReleaseNULL(memory);
+ 	OSSafeReleaseNULL(state);
+ 	OSObject::free();
+@@ -98,7 +101,7 @@
+ 	}
+ 	IOLockLock(sweet_surface_lock);
+ 	if (kernelMap == NULL && memory != NULL) {
+-		kernelMap = memory->map(kIOMapWriteCombineCache);
++		kernelMap = memory->map(mapCache | kIOMapReadOnly);
+ 	}
+ 	IOLockUnlock(sweet_surface_lock);
+ 	return kernelMap != NULL ? (uintptr_t)kernelMap->getVirtualAddress() : 0;
+@@ -299,6 +302,9 @@
+ 	packedBGRA = s->pixelFormat == 'b3a8' || s->pixelFormat == 'w30r' ||
+ 	    s->pixelFormat == 'w30R' || s->pixelFormat == 'l10r';
+ 	if (packedBGRA) {
++		if (props->getObject("IOSurfaceAddress") != NULL) {
++			return kIOReturnUnsupported; /* existing pixels cannot be relabelled */
++		}
+ 		static bool reported;
+ 		if (!reported) {
+ 			reported = true;
+@@ -360,9 +366,14 @@
+ 
+ 	uint64_t alloc = sweet_dict_u32(props, "IOSurfaceAllocSize", 0);
+ 	if (alloc < end) {
++		if (alloc != 0 && props->getObject("IOSurfaceAddress") != NULL) {
++			return kIOReturnBadArgument;
++		}
+ 		alloc = end;
+ 	}
+-	alloc = round_page(alloc);
++	if (props->getObject("IOSurfaceAddress") == NULL) {
++		alloc = round_page(alloc);
++	}
+ 	if (alloc == 0 || alloc > SWEET_SURFACE_MAX_ALLOC) {
+ 		return kIOReturnNoMemory;
+ 	}
+@@ -706,7 +717,36 @@
+ 	}
+ 	s->parentID = args->scalarInputCount > 0 ? (uint32_t)args->scalarInput[0] : 0;
+ 	ret = sweet_surface_layout(s, props);
+-	if (ret == kIOReturnSuccess) {
++	OSNumber *address = OSDynamicCast(OSNumber, props->getObject("IOSurfaceAddress"));
++	if (ret == kIOReturnSuccess && props->getObject("IOSurfaceAddressRanges") != NULL) {
++		ret = kIOReturnUnsupported;
++	}
++	if (ret == kIOReturnSuccess && props->getObject("IOSurfaceAddress") != NULL) {
++		/*
++		 * After HackiOS MiniIOSurface.cpp (OOSEX GANG, APSL-2.0): images
++		 * supplied by CA, including app icons, already have their pixels in
++		 * the caller's memory. Keep that memory alive, rather than allocating
++		 * a blank replacement. The owner may keep drawing into it afterward.
++		 */
++		uint64_t base = address != NULL ? address->unsigned64BitValue() : 0;
++		ret = kIOReturnBadArgument;
++		if (base != 0 && base + s->allocSize > base) {
++			for (unsigned attempt = 0; attempt < 2 && !s->memoryPrepared; attempt++) {
++				OSSafeReleaseNULL(s->memory);
++				s->memory = IOMemoryDescriptor::withAddressRange(base, s->allocSize,
++				    attempt == 0 ? kIODirectionInOut : kIODirectionOut, fTask);
++				ret = s->memory != NULL ? s->memory->prepare() : kIOReturnNoMemory;
++				if (ret == kIOReturnSuccess) {
++					s->memoryPrepared = true;
++					s->mapCache = kIOMapDefaultCache | (attempt ? kIOMapReadOnly : 0);
++				}
++			}
++			if (s->memoryPrepared) {
++				ret = sweet_surface_publish(s) ? kIOReturnSuccess : kIOReturnNoResources;
++			}
++		}
++		sweet_surf_log_once("client pixels wrapped", 0);
++	} else if (ret == kIOReturnSuccess) {
+ 		IOBufferMemoryDescriptor *mem = NULL;
+ 		if ((uint64_t)OSAddAtomic64(s->allocSize, (volatile SInt64 *)&sweet_surface_wired) +
+ 		    s->allocSize <= SWEET_SURFACE_WIRED_MAX) {

@@ -629,3 +629,14 @@ votes ARC(pri gfx idx, sec mx idx, vlvl) = 0, (2,2,64), (3,2,128), (4,2,192), (5
 GMU 200 MHz cx (2,2,64)), minimal BW table (1 level, no commands; refusal non-fatal), TEST; then register DCVS
 (ACK_OPTION 0, PERF_SETTING idx|3<<28, sweetgpuperf default 1 = 267 MHz, OOB dcvs = set bit 23 ack bit 31, clear by
 writing bit 31), OOB gpu (bit 16 / ack 24). Steps after shift by one: use sweetgpu=21.
+
+**Stage 5 (patch 0092, kernel side, not yet built/tested):** `iokit/Kernel/arm/SweetGPU.cpp` = HackiOS RedwoodGPU.cpp
+ported (class names RedwoodGPU/RedwoodGPUUserClient kept so HackiOS userland redwood-drm/eagl.c work unchanged):
+MiniIOSurface -> SweetSurface adapter (copy = sweet_surface_copy, drop = release, pixels-only memory at offset 0,
+kernelAddress(), seed at state page +0xc, drawn fence in gSurfaceDrawn[id]); MiniIOMobileFramebufferShow copies to
+the boot fb 0x9c000000. Kernel API in sweet_adreno.c ("the GPU kept on"): VA allocator from 0x20000000 (1024-hole
+free list), map/unmap on context 0 + TLBIASID, fence at scratch+0x40 by CACHE_FLUSH event, a6xx_submit-style
+CP_INDIRECT_BUFFER submission, msm GET_PARAM answers for a618 (chip 0x06010800, gmem 512K, hbb 14). Enabled by
+sweetgpukeep=1 after step 21 passes -> RedwoodGPUStart(). Not ported yet: per-submission timing, gpu_recover.
+Stage 6 (userland: Mesa 25.0.7 freedreno for Darwin + redwood-drm + eagl.c injected into backboardd) needs an iOS
+cross toolchain (theos + iPhoneOS 16.x SDK) on the build PC.

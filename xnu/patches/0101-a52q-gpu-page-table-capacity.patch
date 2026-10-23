@@ -1,0 +1,101 @@
+--- a/bsd/dev/sweet_adreno.c
++++ b/bsd/dev/sweet_adreno.c
+@@ -719,12 +719,22 @@
+ 	__asm__ volatile ("dsb sy" ::: "memory");
+ }
+ 
+-#define SPACE_TABLES            64
++/*
++ * The core advertises GPU VA 0x20000000..0xffffffff to Mesa. A level-3
++ * table covers 2 MiB: 64 total tables covered less than 124 MiB before
++ * mappings started failing. Allow every table for the first 4 GiB:
++ * 2048 leaf tables + 4 middle tables + root, with three spare entries.
++ * Tables are allocated on demand; this is a descriptor limit, not a
++ * reservation of backing memory. After HackiOS redwood_adreno.c.
++ */
++#define SPACE_TABLES            (2048 + 4 + 1 + 3)
+ 
+ struct gpu_space {
+ 	const char *name;
+ 	uint32_t context, match, stream;
+ 	uint32_t table_count;
++	vm_offset_t table_page;
++	uint32_t table_page_used;
+ 	uint64_t *root;
+ 	struct {
+ 		uint64_t phys;
+@@ -735,19 +745,27 @@
+ static uint64_t *
+ space_new_table(struct gpu_space *space)
+ {
+-	vm_offset_t page;
+-	if (space->table_count == SPACE_TABLES ||
+-	    kmem_alloc(kernel_map, &page, PAGE_SIZE, KMA_KOBJECT | KMA_ZERO | KMA_DATA, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
++	if (space->table_count >= SPACE_TABLES) {
++		printf("SWEET GPU: %s page-table limit reached (%u)\n", space->name, space->table_count);
+ 		return NULL;
+ 	}
+-	/* one 4K table per 16K page: simple, and the tables are few */
+-	space->tables[space->table_count].phys = kvtophys(page);
+-	space->tables[space->table_count].table = (uint64_t *)page;
++	/* Four 4K SMMU tables per 16K XNU page, as in HackiOS. */
++	if (space->table_page == 0 || space->table_page_used == PAGE_SIZE) {
++		if (kmem_alloc(kernel_map, &space->table_page, PAGE_SIZE,
++		    KMA_KOBJECT | KMA_ZERO | KMA_DATA, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
++			return NULL;
++		}
++		space->table_page_used = 0;
++	}
++	vm_offset_t table = space->table_page + space->table_page_used;
++	space->table_page_used += 4096;
++	space->tables[space->table_count].phys = kvtophys(table);
++	space->tables[space->table_count].table = (uint64_t *)table;
+ 	return space->tables[space->table_count++].table;
+ }
+ 
+ static uint64_t *
+-space_next(struct gpu_space *space, uint64_t *entry)
++space_next(struct gpu_space *space, uint64_t *entry, bool create)
+ {
+ 	if (*entry & 1) {
+ 		for (uint32_t i = 0; i < space->table_count; i++) {
+@@ -757,6 +775,9 @@
+ 		}
+ 		return NULL;
+ 	}
++	if (!create) {
++		return NULL;
++	}
+ 	uint64_t *table = space_new_table(space);
+ 	if (table != NULL) {
+ 		*entry = kvtophys((vm_offset_t)table) | PTE_TABLE;
+@@ -767,13 +788,23 @@
+ static bool
+ space_map(struct gpu_space *space, uint64_t address, uint64_t phys, uint64_t attributes)
+ {
+-	if (address >> 39 || (space->root == NULL && (space->root = space_new_table(space)) == NULL)) {
+-		return false;
+-	}
+-	uint64_t *level2 = space_next(space, &space->root[address >> 30 & 0x1ff]);
+-	uint64_t *level3 = level2 ? space_next(space, &level2[address >> 21 & 0x1ff]) : NULL;
++	bool clearing = phys == 0 && attributes == 0;
++	if (address >> 39) {
++		return false;
++	}
++	if (space->root == NULL) {
++		if (clearing) {
++			return true;
++		}
++		if ((space->root = space_new_table(space)) == NULL) {
++			return false;
++		}
++	}
++	uint64_t *level2 = space_next(space, &space->root[address >> 30 & 0x1ff], !clearing);
++	uint64_t *level3 = level2 ? space_next(space, &level2[address >> 21 & 0x1ff], !clearing) : NULL;
+ 	if (level3 == NULL) {
+-		return false;
++		/* Unmapping a hole must not allocate more tables during error cleanup. */
++		return clearing;
+ 	}
+ 	level3[address >> 12 & 0x1ff] = phys == 0 && attributes == 0 ? 0 : phys | attributes | PTE_PAGE;
+ 	return true;

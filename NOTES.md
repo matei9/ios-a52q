@@ -1,12 +1,13 @@
 # A52q port (Samsung Galaxy A52, SM-A525F, SM7125 "atoll") - started 2026-10-23
 
-**Active GPU handoff (2026-10-23, latest):** on-phone boot **0099**; BGRA negotiation now
-works (no 0x506), but backboardd crashes on a bogus surface returned by unimplemented wrapper
-selector 6. Fix **0100**, commit `5a761f4`, CI **40014639866** succeeded; image ready, awaiting TWRP and per-flash approval. 0099 commit `bb21e0d`,
-CI **40012845417** succeeded. Live console: `logs/live-a52q-0099.txt`, UDP listener session 63005.
-See final handoff entries below for exact crash symbols, image hashes, approval and boot results.
-Next: obtain required per-flash approval, put phone in TWRP, flash 0100 and boot. Do not claim
-GPU UI success yet. Keep `gpu_cached=1` and injection args from 0098c.
+**Active GPU handoff (2026-10-23, latest):** on-phone boot **0100**, explicit user-approved
+flash. Backboardd crash loop FIXED; Mesa FD618 submits frames and framebuffer swaps. User sees
+lock screen with weird red background, stuck. Log shows GPU mapping failures -> GL OOM 0x505 and
+framebuffer 0x506. **0101** fixes the undersized 64-entry page-table registry (less than 124 MiB
+of leaf coverage versus 3.5 GiB exposed VA), packs four tables per page and avoids allocating on
+unmap. Source patch ready, next CI/boot pending. Keep gpu_cached=1 and injection args as 0098c.
+Live log: `logs/live-a52q-0100.txt`, listener session 46702. Do not claim usable GPU UI yet.
+See final handoff entries below for exact builds, hashes, crash symbols and boot observations.
 
 Fork: github.com/matei9/ios-a52q (ONLY this repo may be used; local `origin` push URL is disabled, remote `a52q`).
 Kernel source for the device (LineageOS): ~/sm7125. IPSW (iPhone10,3 16.7.16 20H392) in repo dir (gitignored).
@@ -770,3 +771,19 @@ User prefers fewer Actions runs and fixes over tests; no additional test files/j
 0099 console listener remains running (session 63005); the phone is still running 0099.
 The CA retain_image disassembly also checks the wrapper for NULL (0x1884088a4), skipping the
 wrap_buffer call when absent. This supports the 0100 fix; runtime result is still unverified.
+
+**Boot 0100 (2026-10-23, user said "flash"):** wrote 4252 x 4096 bytes to boot from TWRP,
+dd exit 0, sync + adb reboot. USB enumerated, ping 3/3 ~1.3 ms. New listener session 46702,
+`logs/live-a52q-0100.txt` (previous listener 63005 was stopped deliberately).
+Observed: "unsupported wrapper 6", no backboardd crash in captured log, Mesa FD618 submits
+commands (12 submissions in a 14.7s diagnostic window), frames and BGRA framebuffer swaps occur.
+User: "it booted but itst auck a t lock screen with a wierd red backgorund".
+Later in log: repeated "buffer ... cannot be entered into the GPU's address space", then
+GL 0x505 (OOM) and 0x506. First frame draws had no GL errors.
+**0101 mapping fix:** source still used bring-up SPACE_TABLES=64. Each leaf covers 2 MiB;
+there is also a root, middle levels and fixed low-address bring-up buffers. HackiOS uses a much
+larger registry (1024). Our exposed VA spans 0x20000000..0xffffffff. Raise registry to 2056
+(enough for every table in 4 GiB), on-demand backing, four 4K tables per 16K page as upstream.
+Unmap now walks existing entries only rather than creating new tables for holes during failure
+cleanup. Mapping registry exhaustion is a strong diagnosis from code/log correlation; 0100 did
+not log table_count directly. Runtime validation pending. No test files/jobs added.

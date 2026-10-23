@@ -1,0 +1,40 @@
+--- a/bsd/dev/sweet_adreno.c
++++ b/bsd/dev/sweet_adreno.c
+@@ -1585,6 +1585,8 @@
+ #define CORE_SQE_ADDRESS        0x01100000u
+ #define CORE_SCRATCH_ADDRESS    0x01200000u
+ #define CORE_TARGET_ADDRESS     0x10000000u
++#define CORE_GMEM_BASE          0x100000ull
++#define CORE_GMEM_SIZE          0x80000ull
+ #define SMMU_SCTLR_SERVE_AFTER_FAULT (1u << 8)
+ 
+ static struct gpu_space core_space = { .name = "the 3D core", .context = 0, .match = 0, .stream = 0 };
+@@ -1723,8 +1725,8 @@
+ 	put64(&core, "uche_write_range_max", GPU_WORD(0x0e05), 0x0001ffffffffffc0ull);
+ 	put64(&core, "uche_trap_base", GPU_WORD(0x0e09), 0x0001fffffffff000ull);
+ 	put64(&core, "uche_write_thru_base", GPU_WORD(0x0e07), 0x0001fffffffff000ull);
+-	put64(&core, "uche_gmem_range_min", GPU_WORD(0x0e0b), 0x100000);          /* ALIGN(512K gmem, 1M) */
+-	put64(&core, "uche_gmem_range_max", GPU_WORD(0x0e0d), 0x100000 + 0x80000 - 1);
++	put64(&core, "uche_gmem_range_min", GPU_WORD(0x0e0b), CORE_GMEM_BASE);          /* ALIGN(512K gmem, 1M) */
++	put64(&core, "uche_gmem_range_max", GPU_WORD(0x0e0d), CORE_GMEM_BASE + CORE_GMEM_SIZE - 1);
+ 	put(&core, "uche_filter_cntl", GPU_WORD(0x0e18), 0x804);
+ 	put(&core, "uche_cache_ways", GPU_WORD(0x0e17), 0x4);
+ 	put(&core, "cp_roq_thresholds_2", GPU_WORD(0x08c2), 0x010000c0);
+@@ -1992,11 +1994,15 @@
+ redwood_gpu_parameter(uint32_t which, uint64_t *value)
+ {
+ 	switch (which) {
+-	case 0x01: case 0x06: case 0x08: case 0x09: case 0x0a: case 0x11:
++	case 0x01: case 0x08: case 0x09: case 0x0a: case 0x11:
+ 		*value = 0;
+ 		return true;
++	case 0x06:                              /* GMEM_BASE: UCHE window, not physical GMEM */
++		/* Mesa adds this to tile-resolve addresses. Zero faults below our 1 MiB window. */
++		*value = CORE_GMEM_BASE;
++		return true;
+ 	case 0x02:                              /* GMEM_SIZE */
+-		*value = 512 * 1024;
++		*value = CORE_GMEM_SIZE;
+ 		return true;
+ 	case 0x03:                              /* CHIP_ID */
+ 		*value = GPU_CHIP_ID;

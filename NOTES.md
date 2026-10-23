@@ -1,13 +1,13 @@
 # A52q port (Samsung Galaxy A52, SM-A525F, SM7125 "atoll") - started 2026-10-23
 
-**Active GPU handoff (2026-10-23, latest):** on-phone boot **0100**, explicit user-approved
-flash. Backboardd crash loop FIXED; Mesa FD618 submits frames and framebuffer swaps. User sees
-lock screen with weird red background, stuck. Log shows GPU mapping failures -> GL OOM 0x505 and
-framebuffer 0x506. **0101** fixes the undersized 64-entry page-table registry (less than 124 MiB
-of leaf coverage versus 3.5 GiB exposed VA), packs four tables per page and avoids allocating on
-unmap. Source patch ready, next CI/boot pending. Keep gpu_cached=1 and injection args as 0098c.
-Live log: `logs/live-a52q-0100.txt`, listener session 46702. Do not claim usable GPU UI yet.
-See final handoff entries below for exact builds, hashes, crash symbols and boot observations.
+**Active GPU handoff (2026-10-23, latest):** on-phone **0101** (commit b03d5bf, CI
+40016396431 SUCCESS, flashed with user approval). Mapping exhaustion fixed: Mesa reports zero
+GL errors over first 30 frames, continued submissions and touch events. User still sees red
+background; unlock gives black screen. Log pinpoints GPU SMMU fault **0x15380**, done122/last125.
+**0102** corrects GMEM_BASE GET_PARAM: driver told Mesa zero but hardware UCHE GMEM is at
+0x100000. Shared base/size constants now drive both hardware and API. Next CI + boot pending.
+Keep gpu_cached=1 and injection args as 0098c. Live console `logs/live-a52q-0101.txt`, listener
+session 85448. Do not claim usable GPU UI yet. See final entries for results/hashes.
 
 Fork: github.com/matei9/ios-a52q (ONLY this repo may be used; local `origin` push URL is disabled, remote `a52q`).
 Kernel source for the device (LineageOS): ~/sm7125. IPSW (iPhone10,3 16.7.16 20H392) in repo dir (gitignored).
@@ -787,3 +787,25 @@ larger registry (1024). Our exposed VA spans 0x20000000..0xffffffff. Raise regis
 Unmap now walks existing entries only rather than creating new tables for holes during failure
 cleanup. Mapping registry exhaustion is a strong diagnosis from code/log correlation; 0100 did
 not log table_count directly. Runtime validation pending. No test files/jobs added.
+
+**0101 build/boot (2026-10-23):** commit b03d5bf; CI 40016396431 SUCCESS; patch applied,
+only four expected blacktop skips. Image `shim/out/a52q-boot-0101.img` 17,481,728 bytes,
+sha256 09e15bf29dfa227fe27526c66d108d28fc54cbd708e31747034c5855256944c1.
+Kernel sha256 3a41c929ea9b56ac783324b4bfc660ef517585ce34483aa606360cb005087727.
+User approved ("ofc" then "now in twrp"). dd wrote 4268 x4096 bytes, exit0; sync + reboot.
+Listener session 85448 -> logs/live-a52q-0101.txt. First 30 Mesa frames: 0 errors; 80
+submissions over a 5s interval. No mapping failures observed. User: red background remains,
+unlock -> black. No backboardd crash yet in this boot, but GPU stalls: submission125, done122,
+rptr=wptr4278; CP fault/int/protect all0; SMMU FSR 0x80000402 FAR 0x15380 syndrome2.
+Black-screen interval also includes display-off requests from iOS; system and touch remain alive.
+Late 0100 note: after long mapping failures it eventually also crashed at far0x18 in a
+non-shared-cache address (likely bridge/Mesa, unconfirmed). Only wrapper NULL+0x30 crash was
+proven fixed by 0100.
+**0102 GMEM API fix:** a52q's UCHE_GMEM_RANGE_MIN/MAX are 0x100000..0x17ffff, but
+redwood_gpu_parameter grouped GMEM_BASE selector6 with zero-valued params (copied from HackiOS,
+which has no such 1MiB window programming). Mesa msm_pipe reads GMEM_BASE, freedreno_screen
+stores it, fd6_resolve_tile adds it to tile offsets. Thus a tile address0x15380 goes to SMMU
+instead of GMEM. Qualcomm adreno.c agrees: UCHE base ALIGN(gmem_size,1MiB), exported in GMEM
+virtual-address property. Patch0102 reports 0x100000 and shares constants with register init.
+This is a confirmed API/register mismatch; validation of its effect on the display is pending.
+No test files/jobs added; user wants fewer CI runs and actual fixes.

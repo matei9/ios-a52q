@@ -1,0 +1,20 @@
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -761,6 +761,17 @@
+ 	}
+ 	case kSweetSurfaceCreate:
+ 		return create(args);
++	case 6: /* IOSurfaceClientWrapClientImage */
++	case 7: /* IOSurfaceClientWrapClientMemory */
++		/*
++		 * No wrapper is created here yet. Returning success with a zeroed
++		 * result makes IOSurface.framework construct a client whose shared
++		 * page is NULL. CA's iosurface_get_edr_factor then crashes copying
++		 * bulk attachments from NULL + 0x30. Like HackiOS MiniIOSurface,
++		 * refuse these methods so the caller can handle the missing wrapper.
++		 */
++		sweet_surf_log_once("unsupported wrapper", selector);
++		return kIOReturnUnsupported;
+ 	case kSweetSurfaceLookup: {
+ 		SweetSurface *s = sweet_surface_copy((uint32_t)arg0);
+ 		IOReturn ret = kIOReturnNotFound;

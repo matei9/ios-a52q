@@ -712,7 +712,7 @@ WIMG/flush path of this open-source pmap truncates PAs above 4 GiB (A52 RAM is a
 rebuild): boot-arg gpu_cached=1 (RedwoodGPU buffers cached, CPU cache pushed out per submission) ->
 shim/out/a52q-boot-0098c.img. Proper fix later: find the 32-bit truncation in pmap/caches.
 
-**GPU format fix 0099 (2026-10-23, Codex):** observed in `logs/live-a52q-0098c.txt`: Mesa reports
+**GPU format fix 0099 (2026-10-23, Codex, commit bb21e0d):** observed in `logs/live-a52q-0098c.txt`: Mesa reports
 `FD618`, then `-attachImage ... 'b3a8': not done` and `glDrawElements: error 0x506` on repeated
 backboardd starts. HackiOS already handles this in `xnu/files/iokit/Kernel/MiniIOSurface.cpp`:
 its surface creation substitutes BGRA for b3a8/w30r/w30R/l10r; b3a8's alpha plane is removed.
@@ -721,3 +721,32 @@ geometry (4 bytes/pixel, element 1x1, no planes), keeping allocation at least as
 This negotiates an 8-bit surface before rendering; it does not implement native 10-bit/P3 rendering.
 Patch applies after 0046+0068; repository validation passes. Kernel CI/boot validation pending.
 Keep `gpu_cached=1` for the separate >4GiB WIMG panic; boot args otherwise as 0098c.
+
+**0099 validation/deployment:** GitHub Actions run 40012845417 on matei9/ios-a52q SUCCESS
+(https://github.com/matei9/ios-a52q/actions/runs/40012845417). Log confirms patch 0099 applied;
+only the four known blacktop patches skipped. Kernel contains the new BGRA8 diagnostic.
+Local C++ harness of the extracted layout function passed: all four formats, alpha-plane removal,
+stride/allocation correction, preserved ordinary BGRA stride, invalid stride/dimension rejection.
+Kernel `xnu/out-0099/kernel.development.sweet` sha256
+9024021744ef235f43c35568f092c94ec7a8001654a29a1612ebfe48a7dbcf8c.
+Boot image `shim/out/a52q-boot-0099.img` (17,416,192 bytes) sha256
+070062493e5b1e0b2492d1a52e90638fab15277485cbb42fdf55fe00fc58d605.
+Args identical to 0098c (sweetgpu=21 sweetgpukeep=1 sweetgpudelay=0 sweetgpupause=0
+sweetinject=/redwood/lib/libsweet-gl.dylib,backboardd gpu_cached=1).
+User explicitly approved flash in this session ("go ahead and flash"). Wrote 4252 x 4096 bytes
+to boot from TWRP, dd exit 0, sync, adb reboot. No userdata/recovery write.
+UDP listener session 63005 -> `logs/live-a52q-0099.txt`. Boot result pending.
+
+**Boot 0099 result (2026-10-23):** USB enumerated and ping 3/3 ~1ms. Adreno steps 1-21 pass.
+Mesa FD618 opens; new BGRA conversion diagnostic printed; bridge successfully attaches IOSurface 2
+as BGRA 1125x2436, row 4544. NO glDrawElements 0x506 in captured log. BUT backboardd still SIGSEGV
+far 0x30: PC unslid 0x1d1b01e70 __platform_memmove+176, LR 0x1a3983ffc
+IOSurfaceClientGetBulkAttachments+68; callers CA::Render::iosurface_get_edr_factor ->
+CA::WindowServer::IOSurface::wrap_buffer -> GLESContext::retain_image. Confirmed disassembly:
+GetBulkAttachments loads shared page from client+0x70 (NULL), adds 0x30, calls memcpy.
+Immediately before crash kernel logs surface selector 6 (WrapClientImage). Our default handler
+incorrectly returns success with a zero result for that unimplemented create-like call.
+**0100:** refuse wrap selectors 6/7 with kIOReturnUnsupported (HackiOS does the same), letting
+IOSurface.framework return NULL rather than constructing an invalid object. Its disassembly at
+0x1a398678c branches to a NULL return on method failure. This fixes a proven driver contract bug;
+CA's handling/fallback and UI rendering still require another boot test. No second flash approved yet.

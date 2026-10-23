@@ -703,3 +703,11 @@ libsweet-gl (`|backboardd| sweet-gl: no RedwoodGPU service ...`) and its IOKit l
 because the GPU bring-up (started 5 s after UFS init) finished AFTER backboardd started (log order).
 **Patch 0098:** exec of a program named in sweetinject waits (max 20 s) while the adreno bring-up thread runs
 (sweet_gpu_wait_settled in sweet_adreno.c, called from sweet_inject_env in kern_exec.c).
+
+**Boot 0098 (22:21:52): the GL bridge RAN in backboardd and Mesa called RedwoodGPU** -> PANIC (photo ~/panic2.jpg) in
+backboardd: RedwoodGPUUserClient::gemNew -> IOBufferMemoryDescriptor::inTaskWithOptions(kIOMapWriteCombineCache) ->
+mach_make_memory_entry -> vm_object_change_wimg_mode -> pmap_set_cache_attributes_internal -> flush_dcache ->
+ml_static_vtop: "phystokv_range: illegal PA 0xe0ac8000; phys base 0x106000000" = 0x1e0ac8000 with bit 32 lost: the
+WIMG/flush path of this open-source pmap truncates PAs above 4 GiB (A52 RAM is all above 4 GiB). Workaround (no
+rebuild): boot-arg gpu_cached=1 (RedwoodGPU buffers cached, CPU cache pushed out per submission) ->
+shim/out/a52q-boot-0098c.img. Proper fix later: find the 32-bit truncation in pmap/caches.

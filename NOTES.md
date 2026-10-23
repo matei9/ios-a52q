@@ -70,6 +70,16 @@ stuck - sample lsd next). fairplayd/bluetoothd respawn ~65x (as on sweet).
 **Patch 0083:** touch vote reg 0x52008 on a52q; RPMh allowlist (ldoc11, ldoc7, ldoa10, ldoa4, ldoa11, ldoa17 with DT
 ranges); USB a52q QUSB2 init before gadget start (RPMh L4A 880 / L11A 1800 / L17A 3075 mV, ahb2phy + clkref CBCR on,
 GCC_QUSB2PHY_PRIM_BCR 0x26000 pulse, PWR_CTRL1 down, DT qusb-phy-init-seq, power up, log PLL_STATUS 0x1a0).
+
+**🎉 Boot 0083 (2026-10-23 18:20, log `logs/a52q-boot-0083.txt`): iOS 16.7 LOCK SCREEN ON THE A52** (first boot, LS
+database reseed finished in < 20 min). Power + volume buttons work (user-confirmed). Touch and USB do not:
+- USB: rails voted OK (RPMh TCS0 done for ldoa4/ldoa11/ldoa17), QUSB2 init PLL_STATUS 0x17 (core ready = locked),
+  but still `ep0 cmd 0x1 timeout`. Host still logs low-speed "not responding to setup address" ~1.7 min after boot
+  (BEFORE RUN_STOP is ever set -> not our gadget's pull-up; origin unknown, maybe Samsung MUIC/charger path).
+- Touch: vote 0x52008 = 0x49bc43c0 (our bits set), then `GCC branch 0x18010 halted (0x8000000a)`: CBCR HW_CTL bit1
+  set -> hardware-gated wrap1 s_ahb reads halted while idle (gcc-atoll.c hwcg_bit 1).
+**Patch 0084:** USB: QSCRATCH_GENERAL_CFG (0xa6f8808) UTMI switch (CLK_DIS, CLK_SEL|PHYSTATUS_SW, ~CLK_DIS) as
+dwc3-msm POST_RESET does for maximum-speed high-speed (A52 DT); touch: accept HW_CTL-gated branches.
 Android data is gone (approved); stock boot in backup/a52q/boot.img.
 
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes

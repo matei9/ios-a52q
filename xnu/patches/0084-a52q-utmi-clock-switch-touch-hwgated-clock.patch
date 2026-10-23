@@ -1,0 +1,52 @@
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 6e4ce4b..b33bfba 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -172,8 +172,14 @@ touch_clocks(void)
+ 	const uint32_t branches[] = {0x18004, 0x18008, 0x1800c, 0x18010, 0x18144};
+ 	for (unsigned i = 0; i < sizeof(branches) / sizeof(branches[0]); ++i) {
+ 		if (!touch_wait_clear(st.gcc, branches[i], 1u << 31)) {
+-			printf("SWEET TOUCH: GCC branch %#x halted (%#x)\n", branches[i],
+-			    touch_rd(st.gcc, branches[i]));
++			uint32_t cbcr = touch_rd(st.gcc, branches[i]);
++			if (cbcr & 2u) {
++				/* HW_CTL: hardware-gated (atoll wrap1 s_ahb), reads halted while idle. */
++				printf("SWEET TOUCH: GCC branch %#x hardware-gated (%#x), continuing\n",
++				    branches[i], cbcr);
++				continue;
++			}
++			printf("SWEET TOUCH: GCC branch %#x halted (%#x)\n", branches[i], cbcr);
+ 			return false;
+ 		}
+ 	}
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index 0fc530b..ab62209 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -123,6 +123,26 @@ usb_a52q_phy_init(vm_offset_t gcc)
+ 	delay(200);
+ 	printf("SWEET USB: a52q QUSB2 init: PLL_STATUS 0x%02x (bit0 = core ready) PWR_CTRL1 0x%02x TUNE1 0x%02x\n",
+ 	    usb_rd(phy, 0x1a0) & 0xff, usb_rd(phy, 0x210) & 0xff, usb_rd(phy, 0x240) & 0xff);
++	/*
++	 * USB2-only operation (DT maximum-speed = "high-speed", USB3 pipe clock off):
++	 * clock the PIPE side of the core from UTMI, as dwc3-msm.c does on
++	 * DWC3_CONTROLLER_POST_RESET_EVENT. Boot 0083: PHY locked but DEPSTARTCFG
++	 * still timed out without this. QSCRATCH_GENERAL_CFG = 0x0a6f8808.
++	 */
++	vm_offset_t qs = ml_io_map(0x0a6f8800, 0x100);
++	if (qs == 0) {
++		return;
++	}
++	uint32_t before = usb_rd(qs, 0x08);
++	*(volatile uint32_t *)(qs + 0x08) = usb_rd(qs, 0x08) | (1u << 8);              /* PIPE_UTMI_CLK_DIS */
++	__asm__ volatile ("dsb sy" ::: "memory");
++	delay(5);
++	*(volatile uint32_t *)(qs + 0x08) = usb_rd(qs, 0x08) | (1u << 0) | (1u << 3);   /* CLK_SEL, PHYSTATUS_SW */
++	__asm__ volatile ("dsb sy" ::: "memory");
++	delay(5);
++	*(volatile uint32_t *)(qs + 0x08) = usb_rd(qs, 0x08) & ~(1u << 8);
++	__asm__ volatile ("dsb sy" ::: "memory");
++	printf("SWEET USB: a52q UTMI clock switch: GENERAL_CFG 0x%08x -> 0x%08x\n", before, usb_rd(qs, 0x08));
+ }
+ 
+ void

@@ -96,6 +96,12 @@ GSI_ONLY when that register is set).
 NACK), ~100 kHz, open drain via OE, clock stretching, 9-clock bus recovery; IRQ gpio9 no pull (DT bias-disable), poll
 only while IRQ low / finger down / every 100 ms (sweettouchirq semantics). Samsung driver never calls
 fts_ic_interrupt_set, so the IC drives IRQ by default.
+
+**Boot 0085 (2026-10-23 19:20:09, `shim/out/a52q-boot-0085.img`): 🎉 TOUCH WORKS (user-confirmed on the lock screen/UI).**
+Touch startup lines were not captured (my `pkill -f` killed the new listener: the pattern was in its own command line).
+USB REGRESSION/ODDITY: host enumerated only at 19:25:00 (~5 min after reboot vs ~50 s on 0084), then 0 RX packets and
+17910 RX errors on enp0s20f0u2, ping fails. Unknown whether the bit-bang touch thread (busy-wait delay()) disturbs the
+USB poll thread or something else; investigate (pull ring log from TWRP: tools/sweet-log-pull.sh).
 Android data is gone (approved); stock boot in backup/a52q/boot.img.
 
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes

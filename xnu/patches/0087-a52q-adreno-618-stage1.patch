@@ -1,6 +1,6 @@
 --- a/bsd/conf/files
 +++ b/bsd/conf/files
-@@ -112,6 +112,7 @@
+@@ -112,5 +112,6 @@
  bsd/dev/sweet_spmi.c			standard
  bsd/dev/sweet_usb.c			standard
  bsd/dev/sweet_cpufreq.c			standard

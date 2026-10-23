@@ -126,6 +126,11 @@ sweetgpudelay=60 s, sweetgpupause=1500 ms before untested accesses so the 1 s lo
 1 GCC GPU clocks + cmd-db gfx/cx/mx.lvl, 2 qfprom words, 3 gpu_cfg_ahb on + gpucc dump, 4 CX GDSC on, 5 GPLL0 votes +
 bus clocks + gmu_clk_src 200 MHz + gpucc branches, 6 GMU regs + always-on counter (19.2 MHz = alive) + cx_misc + VBIF (last:
 may need GX). Not pushed until CI of 0086 finishes (avoid cancel).
+**PITFALL:** CI run 39987915791 "succeeded" but SKIPPED 0086 ("corrupt patch at line 10": hand-written bsd/conf/files hunk
+header said 6 old lines, there were 5; 0087 same). blacktop's build only warns on a skipped patch. Fixed both headers,
+verified with git apply --check on a synthetic tree. ALWAYS check `gh run view ID --log | grep "Skipping patch"` (only
+blacktop's TrustCache/iobuffermemd_monterey/skywalk_sonoma/syntax_checker_sonoma are expected) and `strings` the kernel.
+Boot 19:45:47 used that 0086 kernel = 0085 code + cpus=8 sweetcpufreq=1 (cpufreq absent; tests cpus=8 only).
 Android data is gone (approved); stock boot in backup/a52q/boot.img.
 
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes

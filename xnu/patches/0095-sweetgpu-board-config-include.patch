@@ -1,0 +1,12 @@
+diff --git a/iokit/Kernel/arm/SweetGPU.cpp b/iokit/Kernel/arm/SweetGPU.cpp
+index 91c6c7e..574327c 100644
+--- a/iokit/Kernel/arm/SweetGPU.cpp
++++ b/iokit/Kernel/arm/SweetGPU.cpp
+@@ -37,6 +37,7 @@
+  * boot-arg it stays stopped and nothing is waited for again.
+  */
+ 
++#include <pexpert/arm64/board_config.h>         /* defines SWEET (boot 0094 build: the file compiled to nothing) */
+ #if defined(SWEET)
+ #include <IOKit/IOLib.h>
+ #include <IOKit/IOLocks.h>

@@ -672,3 +672,7 @@ NOT used (16.5 window-server address hooks + own touch); ours: `userland/sweet_g
 `tools/a52q-install-gl.sh` (phone in TWRP, sudo): pull 16 GiB root -> research/phone-root.img, copy, fsck, mount,
 /redwood/lib + launchd.plist backboardd EnvironmentVariables DYLD_INSERT_LIBRARIES=/redwood/lib/libsweet-gl.dylib,
 sparsediff -> fastbootd flash userdata (changed blocks only). Not run yet. Needs AMFI patch 0094 for dyld to honour it.
+
+**CI run 40002349489 (patches up to 0094) FAILED to link:** `_RedwoodGPUStart` undefined. SweetGPU.cpp compiled to
+nothing: its `#if defined(SWEET)` came before any include, and SWEET comes from <pexpert/arm64/board_config.h>
+(SweetSurface.h includes it first). **Patch 0095:** include board_config.h first.

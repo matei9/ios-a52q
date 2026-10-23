@@ -711,3 +711,13 @@ ml_static_vtop: "phystokv_range: illegal PA 0xe0ac8000; phys base 0x106000000" =
 WIMG/flush path of this open-source pmap truncates PAs above 4 GiB (A52 RAM is all above 4 GiB). Workaround (no
 rebuild): boot-arg gpu_cached=1 (RedwoodGPU buffers cached, CPU cache pushed out per submission) ->
 shim/out/a52q-boot-0098c.img. Proper fix later: find the 32-bit truncation in pmap/caches.
+
+**GPU format fix 0099 (2026-10-23, Codex):** observed in `logs/live-a52q-0098c.txt`: Mesa reports
+`FD618`, then `-attachImage ... 'b3a8': not done` and `glDrawElements: error 0x506` on repeated
+backboardd starts. HackiOS already handles this in `xnu/files/iokit/Kernel/MiniIOSurface.cpp`:
+its surface creation substitutes BGRA for b3a8/w30r/w30R/l10r; b3a8's alpha plane is removed.
+Ported that behavior into SweetSurface layout in patch 0099, including fresh packed BGRA8 row
+geometry (4 bytes/pixel, element 1x1, no planes), keeping allocation at least as large as needed.
+This negotiates an 8-bit surface before rendering; it does not implement native 10-bit/P3 rendering.
+Patch applies after 0046+0068; repository validation passes. Kernel CI/boot validation pending.
+Keep `gpu_cached=1` for the separate >4GiB WIMG panic; boot args otherwise as 0098c.

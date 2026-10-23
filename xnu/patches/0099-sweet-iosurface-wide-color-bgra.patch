@@ -1,0 +1,54 @@
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -281,6 +281,7 @@
+ sweet_surface_layout(SweetSurface *s, OSDictionary *props)
+ {
+ 	uint64_t end;
++	bool packedBGRA;
+ 
+ 	s->width = sweet_dict_u32(props, "IOSurfaceWidth", 0);
+ 	s->height = sweet_dict_u32(props, "IOSurfaceHeight", 0);
+@@ -288,20 +289,41 @@
+ 	s->elementWidth = (uint8_t)sweet_dict_u32(props, "IOSurfaceElementWidth", 1);
+ 	s->elementHeight = (uint8_t)sweet_dict_u32(props, "IOSurfaceElementHeight", 1);
+ 	s->pixelFormat = sweet_dict_u32(props, "IOSurfacePixelFormat", 0);
++	/*
++	 * After HackiOS MiniIOSurface.cpp (OOSEX GANG, APSL-2.0): CA on the
++	 * iPhone X identity requests ten-bit screen/transition surfaces. Our GL
++	 * bridge and scanout use packed BGRA8. Negotiate that layout at creation,
++	 * before any pixels exist, and report it back through IOSurfaceGet*.
++	 * b3a8 has a separate alpha plane: changing only its FourCC is insufficient.
++	 */
++	packedBGRA = s->pixelFormat == 'b3a8' || s->pixelFormat == 'w30r' ||
++	    s->pixelFormat == 'w30R' || s->pixelFormat == 'l10r';
++	if (packedBGRA) {
++		static bool reported;
++		if (!reported) {
++			reported = true;
++			printf("SWEET IOSurface: wide-color requests use packed BGRA8 (GL/scanout layout)\n");
++		}
++		s->pixelFormat = 'BGRA';
++		s->bytesPerElement = 4;
++		s->elementWidth = s->elementHeight = 1;
++	}
+ 	s->cacheMode = sweet_dict_u32(props, "IOSurfaceCacheMode", 0);
+ 	s->offset = sweet_dict_u32(props, "IOSurfaceOffset", 0);
+ 	if (s->width > SWEET_SURFACE_MAX_DIM || s->height > SWEET_SURFACE_MAX_DIM ||
+ 	    s->bytesPerElement > 64 || s->elementWidth == 0 || s->elementHeight == 0) {
+ 		return kIOReturnBadArgument;
+ 	}
+-	s->bytesPerRow = sweet_dict_u32(props, "IOSurfaceBytesPerRow",
++	s->bytesPerRow = packedBGRA ? sweet_row_bytes(s->width, 1, 4) :
++	    sweet_dict_u32(props, "IOSurfaceBytesPerRow",
+ 	    sweet_row_bytes(s->width, s->elementWidth, s->bytesPerElement));
+ 	if (s->bytesPerRow < (uint64_t)sweet_div_up(s->width, s->elementWidth) * s->bytesPerElement) {
+ 		return kIOReturnBadArgument;
+ 	}
+ 	end = (uint64_t)s->offset + (uint64_t)s->bytesPerRow * sweet_div_up(s->height, s->elementHeight);
+ 
+-	OSArray *planes = OSDynamicCast(OSArray, props->getObject("IOSurfacePlaneInfo"));
++	OSArray *planes = packedBGRA ? NULL :
++	    OSDynamicCast(OSArray, props->getObject("IOSurfacePlaneInfo"));
+ 	s->planeCount = 0;
+ 	if (planes != NULL) {
+ 		uint64_t next = s->offset;

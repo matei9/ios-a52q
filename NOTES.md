@@ -30,6 +30,23 @@ UFS probe OK: ver 0x210, LUN0 lastlba 0x1da33ff (4K), GPT ok, userdata lba 0x304
 Kernel unchanged from sweet for first boot (CI run 39970409616 on matei9/ios-a52q). Boot-args plan: `sweettouch=0`, no
 `sweetusb` (QUSB2 PHY is 0x88e3000 on atoll vs 0x88e2000 sweet), cpus=6. Same touch SE (QUP a84000) as sweet but chip is
 STM FTS @0x49 -> new driver later. Root image being built by the user (sudo): research/ios16-root.img/.simg.
+That CI run was CANCELLED (user wants touch + USB in the first build).
+
+**Probe 2 (photo ~/shim2.jpg, 2026-10-23):** USB GDSC 0xf8222000 ON; CBCR off mask 0x120 = ahb2phy (0x6a004) and
+usb3 pipe (0xf058) off, master/sleep/utmi/cfg-noc/aggre ON. DWC3 readable: GSNPSID 0x5533330a (v3.30a), GCTL 0x00102000
+(device), DCTL 0x00f00000 (halted), DSTS 0x00520004, GEVNTADR 0, GUSB2PHYCFG 0x2500 -> Samsung ABL leaves USB like
+Xiaomi ABL did. QUP1: GCC vote 0x5200c = 0 (!), S1 CBCR 0x80004220 (off), RCG cfg 0x00100000; SE7 fw 0x303 (I2C fw
+loaded), status 0. TLMM: gpio6/7 cfg 0 (gpio), gpio8 cfg 0x200 io 3 = OUTPUT HIGH (not touch reset on a52q, never
+touch it), gpio9 cfg 1 (pull-down) io 0.
+
+**Patch 0082** (`sweetboard=a52q` boot-arg selects A52 paths, sweet unchanged):
+- keys: vol-up = PM6150L GPIO8 (SPMI ppid 0x4c7, regs 0xc7xx; sweet GPIO2 0x4c1/0xc1xx). Vol-down/power PON same.
+- usb: QUSB2 0x88e3000; enable ahb2phy CBCR if off (diagnostic PHY read). Gadget path unchanged.
+- touch: STM FTS5CU56A @0x49 on SE7: RPMh ldoc7 3000 mV (avdd) then ldoa10 1800 mV (dvdd), gpio6/7 mux 1, no reset
+  GPIO; READ_ID 0x22 (expect id[2..3] = 48 36), system reset FA 20 00 00 24 81, wait ready event 09 00, touchtype
+  30 61 00, force cal 0x13 (echo 43 13), clear 0x62, scan A0 00 01. Poll READ_ONE_EVENT 0x60 every 10 ms; coordinate
+  event byte0 = eid(0)|tid<<2|action<<6, x = b1<<4|b3>>4, y = b2<<4|b3&15; scaled from `sweettouchmax` (default 4096,
+  from DT stm,max_coords 0xfff - UNVERIFIED, check TWRP `getevent -p`). TX limit raised to 8 bytes.
 
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 

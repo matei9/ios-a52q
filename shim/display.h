@@ -13,3 +13,4 @@ extern struct disp_state disp;
 void disp_init(void);
 void disp_kick(void);
 void disp_report(void);
+void board_probe(void);

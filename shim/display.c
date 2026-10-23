@@ -102,3 +102,40 @@ void disp_report(void)
 	con_hex2(" sspp", "size=", disp.src_size, "stride=", disp.stride);
 	con_hex2(" sspp", "fmt=", disp.format, 0, 0);
 }
+
+/*
+ * Read-only power/clock probe for the USB and touch bring-up: what does the
+ * bootloader leave on? GCC offsets are the same on sdmmagpie and atoll
+ * (gcc-atoll.c). DWC3 is only read when its GDSC and clocks are on.
+ */
+#define GCC_BASE		0x00100000UL
+#define TLMM_NORTH		0x03900000UL
+#define DWC3_BASE		0x0a600000UL
+
+void board_probe(void)
+{
+	static const uint32_t usb_cbcr[] = { 0xf010, 0xf014, 0xf018, 0x502c, 0x8201c, 0x6a004, 0x8c010, 0xf050, 0xf058 };
+	uint32_t gdsc = rd32(GCC_BASE + 0xf004);
+	uint32_t off = 0;
+
+	for (unsigned i = 0; i < sizeof(usb_cbcr) / sizeof(usb_cbcr[0]); i++)
+		if (rd32(GCC_BASE + usb_cbcr[i]) & (1U << 31))
+			off |= 1U << i;
+	con_hex2("USB", "gdsc=", gdsc, "clkoff=", off);
+	con_hex2(" usb", "master=", rd32(GCC_BASE + 0xf010), "rcg=", rd32(GCC_BASE + 0xf01c + 4));
+	con_hex2(" usb", "bcr=", rd32(GCC_BASE + 0xf000), "phybcr=", rd32(GCC_BASE + 0x12000));
+	if ((gdsc & (1U << 31)) && !(off & 1) && !(off & 8)) {
+		uintptr_t d = DWC3_BASE;
+		con_hex2(" dwc3", "id=", rd32(d + 0xc120), "gctl=", rd32(d + 0xc110));
+		con_hex2(" dwc3", "dctl=", rd32(d + 0xc704), "dsts=", rd32(d + 0xc70c));
+		con_hex2(" dwc3", "evnt=", rd32(d + 0xc400), "phy=", rd32(d + 0xc200));
+	}
+	con_hex2("QUP1", "vote=", rd32(GCC_BASE + 0x5200c), "s1=", rd32(GCC_BASE + 0x18144));
+	con_hex2(" qup", "rcg=", rd32(GCC_BASE + 0x18148), "cfg=", rd32(GCC_BASE + 0x1814c));
+	con_hex2(" se7", "fw=", rd32(0x00a84000UL + 0x68), "status=", rd32(0x00a84000UL + 0x40));
+	for (unsigned pin = 6; pin <= 9; pin++) {
+		char label[] = "GPIO0";
+		label[4] = '0' + pin;
+		con_hex2(label, "cfg=", rd32(TLMM_NORTH + pin * 0x1000), "io=", rd32(TLMM_NORTH + pin * 0x1000 + 4));
+	}
+}

@@ -383,6 +383,7 @@ void shim_main(uint64_t dtb)
 	con_str("SHIM", "ios-sweet/a52q: xnu loader");
 	con_skip();
 	disp_report();
+	board_probe();
 	con_skip();
 	const char *why = loader_boot(dtb);
 	con_str("LOADER", why);

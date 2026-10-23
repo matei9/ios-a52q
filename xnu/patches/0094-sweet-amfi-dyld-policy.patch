@@ -1,0 +1,61 @@
+diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
+index cb67b4d..b49e97c 100644
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -305,8 +305,47 @@ sweet_sandbox_syscall(struct proc *p, int call, __unused user_addr_t arg)
+ 	}
+ }
+ 
++/*
++ * dyld asks AMFI what it may do for the process it starts (__mac_syscall("AMFI", 0x5a, { flags in,
++ * pointer to flags out })). Allow everything -- @paths, DYLD_* variables, inserted libraries,
++ * interposing -- so that DYLD_INSERT_LIBRARIES works in stock daemons (the GPU's OpenGL ES bridge in
++ * backboardd). Request 0x60 (boot-arg state) says "not enforcing", as nothing is. From HackiOS
++ * bsd/kern/kern_minimac.c miniamfi_policy_syscall (OOSEX GANG, APSL 2.0). The policy must be named
++ * exactly "AMFI" for __mac_syscall to reach it; every other request answers ENOPOLICY, which is what
++ * user space got before there was a policy of that name.
++ */
++#define AMFI_SYSCALL_CHECK_DYLD_POLICY  0x5a
++#define AMFI_DYLD_OUTPUT_ALLOW_ALL      0xffULL
++#define AMFI_SYSCALL_QUERY_BOOTARG_STATE 0x60
++#define AMFI_BOOTARG_STATE_NOT_ENFORCING 0x86ULL
++
++static int
++sweet_amfi_policy_syscall(__unused struct proc *p, int call, user_addr_t arg)
++{
++	struct {
++		uint64_t input_flags;
++		user_addr_t output_flags;
++	} args;
++	uint64_t flags = AMFI_DYLD_OUTPUT_ALLOW_ALL;
++	uint64_t state = AMFI_BOOTARG_STATE_NOT_ENFORCING;
++	int error;
++
++	if (call == AMFI_SYSCALL_QUERY_BOOTARG_STATE) {
++		return copyout(&state, arg, sizeof(state));
++	}
++	if (call != AMFI_SYSCALL_CHECK_DYLD_POLICY) {
++		return ENOPOLICY;
++	}
++	error = copyin(arg, &args, sizeof(args));
++	if (error == 0) {
++		error = copyout(&flags, args.output_flags, sizeof(flags));
++	}
++	return error;
++}
++
+ static const struct mac_policy_ops sweet_amfi_mac_ops = {
+ 	.mpo_vnode_check_signature = sweet_amfi_vnode_check_signature,
++	.mpo_policy_syscall = sweet_amfi_policy_syscall,
+ };
+ 
+ /*
+@@ -360,7 +399,7 @@ static struct mac_policy_conf sweet_sandbox_mac_conf = {
+ static mac_policy_handle_t sweet_sandbox_mac_handle;
+ 
+ static struct mac_policy_conf sweet_amfi_mac_conf = {
+-	.mpc_name = "SWEET AMFI",
++	.mpc_name = "AMFI",             /* __mac_syscall("AMFI", ...) finds policies by this name */
+ 	.mpc_fullname = "SWEET built-in Mobile File Integrity",
+ 	.mpc_ops = &sweet_amfi_mac_ops,
+ };

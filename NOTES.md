@@ -648,3 +648,16 @@ whole header and called it "no acknowledgement". (Note: the first watcher report
 adb right after `adb reboot` while the old connection was still listed; the persistent log on userdata showed the 0090
 boot because the 0091 run's lines came over USB.)
 **Patch 0093:** match HFI ACKs by sequence number (kgsl HDR_CMP_SEQNUM). Next boot: sweetgpu=21 sweetgpukeep=1.
+
+**Patch 0094 (stage 6 prerequisite):** sweet_amfi.c MAC policy renamed "SWEET AMFI" -> "AMFI" (dyld's
+__mac_syscall("AMFI", 0x5a) finds policies by name; before, dyld got ENOPOLICY and treated every process as restricted,
+so DYLD_INSERT_LIBRARIES was ignored) + policy_syscall: 0x5a check dyld policy -> 0xff allow all, 0x60 boot-arg state ->
+0x86 not enforcing, else ENOPOLICY (HackiOS kern_minimac.c).
+**Stage 6 userland, started 2026-10-23:** theos installed by hand at ~/theos (Arch has no update-alternatives:
+manual clone + L1ghtmann iOSToolchain-x86_64 + sparse iPhoneOS16.5.sdk; test arm64 iOS binary links OK).
+HackiOS workspace at ~/hackios/hackios-xnu-kernel (common/setup.sh merged the userland repo; links added:
+xnu-deps/host/bin/ld64 -> ~/theos/toolchain/linux/iphone/bin/ld, xnu-clang++ -> xnu-clang), Mesa 25.0.7
+softpipe+freedreno for arm64-apple-ios16.5 via tools/mk-mesa.sh (host clang 23.1.3) -> xnu-deps/build/mesa/out.
+CAVEAT: HackiOS libredwood.dylib (inject.c) hooks shared-cache addresses of iOS 16.5 20F66 (checked before use);
+we run 16.7.16 20H392 -> those hooks will refuse; eagl.c (libredwood-gl) uses ObjC swizzling (version-independent).
+Options: move our root to 16.5 20F66 like HackiOS, or port the address hooks we need.

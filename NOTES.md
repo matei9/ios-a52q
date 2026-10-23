@@ -81,6 +81,21 @@ database reseed finished in < 20 min). Power + volume buttons work (user-confirm
 **Patch 0084:** USB: QSCRATCH_GENERAL_CFG (0xa6f8808) UTMI switch (CLK_DIS, CLK_SEL|PHYSTATUS_SW, ~CLK_DIS) as
 dwc3-msm POST_RESET does for maximum-speed high-speed (A52 DT); touch: accept HW_CTL-gated branches; search DFS levels
 0..7 (RCG+0x1c+4n) for XO/1 and program SE_CLK_SEL with it (sweet assumed level 0). First CI run of 0084 cancelled to add this.
+
+**Boot 0084 (18:51:09): 🎉 USB WORKS** - host enumerates `1209:0001 Sweet iOS (USB Ethernet)` at 18:52:01 (cdc_ether,
+host if `enp0s20f0u2`), ping 192.168.7.2 OK. Host setup without sudo: `nmcli con add type ethernet ifname enp0s20f0u2
+con-name ios-a52q ipv4.method manual ipv4.addresses 192.168.7.1/24 ipv6.method disabled` (persistent NM profile);
+user ran `sudo ufw allow in on enp0s20f0u2` (ufw was dropping the UDP log). Live log listener: python UDP on
+192.168.7.1:5140 -> `logs/live-a52q-0084.txt` (streamer has no resend: force-restart the phone, Vol-Down+Power ~7 s,
+to get a whole boot). Lock screen again; touch NOT working:
+`DFS level0=0x1` (XO/1 OK), `GCC branch 0x18010 hardware-gated, continuing`, `se7 fw=0x303 proto=3 tx=0x20102864
+rx=0x20104800` then `need ABL-loaded I2C firmware and 32-bit FIFOs` -> the failing condition is GENI_IF_DISABLE_RO
+(SE+0x64) bit0 = FIFO interface disabled: Samsung's QUP firmware loads SE7 GSI-only (Linux i2c-qcom-geni: se_mode
+GSI_ONLY when that register is set).
+**Patch 0085:** a52q touch over GPIO bit-bang I2C (gpio6 SDA / gpio7 SCL per QUP convention, auto-swap on address
+NACK), ~100 kHz, open drain via OE, clock stretching, 9-clock bus recovery; IRQ gpio9 no pull (DT bias-disable), poll
+only while IRQ low / finger down / every 100 ms (sweettouchirq semantics). Samsung driver never calls
+fts_ic_interrupt_set, so the IC drives IRQ by default.
 Android data is gone (approved); stock boot in backup/a52q/boot.img.
 
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes

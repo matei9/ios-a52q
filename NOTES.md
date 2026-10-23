@@ -605,3 +605,14 @@ adreno_a6xx_gmu.c, kgsl_gmu.c, kgsl_hfi.c; SMMU page tables after HackiOS):
 Firmware reaches the kernel via `tools/mkpayload.py --firmware fw-a52q/gpu` (container b'SWFW', ADT
 /chosen/memory-map "SweetFirmware", kernel reads via SecureDTGetProperty + ml_static_ptovirt).
 `tools/a52q-boot.sh KERNEL OUT.img [boot-args]` builds the A52 boot image with the standard args + firmware.
+
+**Stage 4 (patch 0090):** step 15 fixed to GBIF (a615 family HAS a GBIF: kgsl a615_gbif, Linux a6xx_has_gbif = !a630;
+my VBIF in steps 6/15 was wrong); 16 TrustZone: is_call_available, PAS shutdown/init image (mdt in a page, plain
+phys: no SHM bridge in this kernel), mem setup 0x93b15000 (gpu_region, 0x2000), a615_zap.b02 (0x7c0, relocatable
+p_paddr 0x5000) at its start, auth_and_reset; 17 SMMU CB0 stream 0: ring 0x01000000 (32K), SQE 0x01100000
+(a630_sqe.fw minus first word), scratch 0x01200000; 18 kgsl a6xx_start a618 subset (gbif halt 0, qos 3, UCHE ranges,
+gmem 0x100000+512K, ROQ 0x010000c0/0x8040362c, mem pool 128, PC_DBG_ECO 0x300<<11, NC mode hbb14/mal32/ubwc2 -> 2,
+UCHE_MODE 1<<21, hang 0xcfffff), RB rptr addr/cntl/base, SQE base, SQE_CNTL 1, CP_ME_INIT (0x2f,3,0x20000000);
+19 CP_SET_SECURE_MODE 0 + CP_MEM_WRITE 0x600dc0de; 20 2D solid fills (RB_CCU_CNTL 0x10<<21 = a618 bypass offset)
+into a 10 MB picture, pixels checked. CI run of 0089 cancelled while queued (GitHub capacity) to build 0089+0090 at once.
+Test with sweetgpu=20.

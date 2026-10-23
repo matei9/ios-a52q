@@ -1,0 +1,489 @@
+diff --git a/bsd/dev/sweet_adreno.c b/bsd/dev/sweet_adreno.c
+index bf9b370..882b1eb 100644
+--- a/bsd/dev/sweet_adreno.c
++++ b/bsd/dev/sweet_adreno.c
+@@ -31,7 +31,12 @@
+  *  13  writes  the GMU's configuration (a6xx_gmu_fw_start) and lets it out of reset: 0xbabeface
+  *  14  writes  GX rail vote by registers (qcom,gpu-quirk-hfi-use-reg), OOB boot_slumber,
+  *              SPTPRAC power on, HFI queues started: the 3D core gets power
+- *  15  reads   the 3D core: RBBM and VBIF registers, the GX power switch
++ *  15  reads   the 3D core: RBBM and GBIF registers (a615 family: GBIF)
++ *  16  asks    TrustZone for the zap shader (a615_zap, PAS 13): init image, memory 0x93b15000, auth
++ *  17  writes  SMMU context 0 for the 3D core (stream 0): ring, SQE microcode a630_sqe.fw, scratch
++ *  18  writes  the a618 init of kgsl a6xx_start, the ring and SQE base; starts the CP; CP_ME_INIT
++ *  19  commands the core out of secure mode and to write a word into our memory
++ *  20  commands a 2D fill of a picture in our memory (HackiOS step 22), checked pixel by pixel
+  * The firmware reaches the kernel in the boot payload (tools/mkpayload.py --firmware fw-a52q/gpu),
+  * as /chosen/memory-map "SweetFirmware": it is the phone's own and never in git.
+  *
+@@ -1219,6 +1224,7 @@ step_gx_on(void)
+ /* ---- step 15: the 3D core's first registers ---- */
+ 
+ static struct block core = { "core", 0x05000000, 0x40000 };
++#define GPU_WORD(n)             (4u * (n))
+ #define RBBM_STATUS             (4u * 0x0210)
+ #define RBBM_STATUS3            (4u * 0x0213)
+ #define CP_HW_FAULT             (4u * 0x0821)
+@@ -1230,21 +1236,458 @@ step_core_read(void)
+ 		printf("SWEET GPU: %u: needs GX power (step 14)\n", step);
+ 		return false;
+ 	}
+-	announce("read the 3D core: RBBM status, CP fault, VBIF version");
++	/* a615 family (a618) has a GBIF (kgsl a615_gbif, Linux a6xx_has_gbif: all but a630), not a VBIF */
++	announce("read the 3D core: RBBM status, CP fault, GBIF halt state");
+ 	get(&core, "rbbm_status", RBBM_STATUS);
+ 	get(&core, "rbbm_status3", RBBM_STATUS3);
+ 	get(&core, "cp_hw_fault", CP_HW_FAULT);
+-	get(&vbif, "version", VBIF_VERSION);
+-	get(&vbif, "clkon", VBIF_CLKON);
++	get(&core, "gbif_halt", GPU_WORD(0x3c45));
++	get(&core, "gbif_halt_ack", GPU_WORD(0x3c46));
++	get(&core, "rbbm_gbif_halt", GPU_WORD(0x0016));
++	return true;
++}
++
++/* ---- step 16: TrustZone and the zap shader ---- */
++
++/*
++ * HackiOS steps 11, 12, 19 (qcom_scm.c PAS calls; GPU = image 13). On this phone's kernel the
++ * loader is qcom,pil-tz-generic (subsys-pil-tz.c), without SHM bridge (CONFIG_QTEE_SHM_BRIDGE
++ * unset), into reserved-memory gpu_region@93b15000 (0x2000). a615_zap is relocatable: segment 2
++ * (a615_zap.b02, 0x7c0 bytes at p_paddr 0x5000, the lowest) goes to the start of the region.
++ */
++#define SCM_FAST                (1ull << 31)
++#define SCM_64                  (1ull << 30)
++#define SCM_SIP                 (2ull << 24)
++#define SCM_CALL(service, command) ((uint64_t)(service) << 8 | (command))
++#define SCM_IS_CALL_AVAILABLE   SCM_CALL(6, 1)
++#define SCM_PAS_INIT_IMAGE      SCM_CALL(2, 1)
++#define SCM_PAS_MEM_SETUP       SCM_CALL(2, 2)
++#define SCM_PAS_AUTH_AND_RESET  SCM_CALL(2, 5)
++#define SCM_PAS_SHUTDOWN        SCM_CALL(2, 6)
++#define SCM_ONE_VALUE           1
++#define SCM_THREE_VALUES        3
++#define SCM_VALUE_AND_BUFFER    (2 | 2 << 6)
++#define SCM_INTERRUPTED         1
++#define PAS_GPU                 13
++#define ZAP_MEMORY              0x93b15000ull
++#define ZAP_MEMORY_SIZE         0x2000u
++
++static int32_t
++scm(const char *what, uint64_t function, uint64_t arguments, uint64_t first, uint64_t second, uint64_t third,
++    uint64_t *answer)
++{
++	uint64_t session = 0;
++	printf("SWEET GPU: %u: about to ask TrustZone %s: smc %#llx (%#llx, %#llx, %#llx)\n", step, what, function, first,
++	    second, third);
++	hold();
++	for (int i = 0; i < 100; i++) {
++		register uint64_t x0 __asm__("x0") = i == 0 ? function : SCM_INTERRUPTED;
++		register uint64_t x1 __asm__("x1") = arguments;
++		register uint64_t x2 __asm__("x2") = first;
++		register uint64_t x3 __asm__("x3") = second;
++		register uint64_t x4 __asm__("x4") = third;
++		register uint64_t x5 __asm__("x5") = 0;
++		register uint64_t x6 __asm__("x6") = session;
++		register uint64_t x7 __asm__("x7") = 0;
++		__asm__ volatile ("smc #0" : "+r" (x0), "+r" (x1), "+r" (x2), "+r" (x3), "+r" (x4), "+r" (x5), "+r" (x6),
++		    "+r" (x7) : : "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17", "memory");
++		session = x6;
++		if (x0 != SCM_INTERRUPTED) {
++			printf("SWEET GPU: %u: TrustZone returns %d, answer %#llx\n", step, (int32_t)x0, x1);
++			*answer = x1;
++			return (int32_t)x0;
++		}
++	}
++	printf("SWEET GPU: %u: TrustZone keeps saying the call was interrupted\n", step);
++	return -1;
++}
++
++static bool zap_loaded;
++
++static bool
++step_zap(void)
++{
++	uint64_t answer = 0, how = SCM_FAST | SCM_64 | SCM_SIP;
++	uint32_t mdt_size = 0, seg_size = 0;
++	if (!gx_on) {
++		printf("SWEET GPU: %u: needs GX power (step 14)\n", step);
++		return false;
++	}
++	announce("ask TrustZone whether it takes calls from this kernel (is_call_available)");
++	if (scm("whether it can be asked", how | SCM_IS_CALL_AVAILABLE, SCM_ONE_VALUE, SCM_SIP | SCM_IS_CALL_AVAILABLE, 0, 0,
++	    &answer) != 0 || answer != 1) {
++		printf("SWEET GPU: %u: TrustZone does not answer the 64-bit call as Linux expects\n", step);
++		return false;
++	}
++	const uint8_t *mdt = firmware_file("a615_zap.mdt", &mdt_size);
++	const uint8_t *segment = firmware_file("a615_zap.b02", &seg_size);
++	if (mdt == NULL || segment == NULL || mdt_size > PAGE_SIZE || seg_size == 0 || seg_size > 0x1000 ||
++	    memcmp(mdt, "\177ELF\1", 5) != 0) {
++		printf("SWEET GPU: %u: need a615_zap.mdt (ELF header + hashes) and a615_zap.b02\n", step);
++		return false;
++	}
++	vm_offset_t page = 0;
++	if (kmem_alloc(kernel_map, &page, PAGE_SIZE, KMA_KOBJECT | KMA_ZERO | KMA_DATA, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
++		return false;
++	}
++	memcpy((void *)page, mdt, mdt_size);
++	to_memory(page, PAGE_SIZE);
++	announce("give up a zap shader a kernel before may have left (TrustZone answers success either way)");
++	(void)scm("to give up the zap shader", SCM_64 | SCM_SIP | SCM_PAS_SHUTDOWN, SCM_ONE_VALUE, PAS_GPU, 0, 0, &answer);
++	announce("hand TrustZone the zap shader's header and hashes (PAS init image)");
++	if (scm("to take the zap shader's signature", SCM_64 | SCM_SIP | SCM_PAS_INIT_IMAGE, SCM_VALUE_AND_BUFFER, PAS_GPU,
++	    kvtophys(page), 0, &answer) != 0 || answer != 0) {
++		printf("SWEET GPU: %u: TrustZone refuses the signature (%#llx)\n", step, answer);
++		return false;
++	}
++	announce("tell TrustZone where the image goes (0x93b15000) and put segment 2 there");
++	if (scm("where the image will be", SCM_64 | SCM_SIP | SCM_PAS_MEM_SETUP, SCM_THREE_VALUES, PAS_GPU, ZAP_MEMORY, 0x1000,
++	    &answer) != 0 || answer != 0) {
++		printf("SWEET GPU: %u: TrustZone refuses the place (%#llx)\n", step, answer);
++		return false;
++	}
++	volatile uint8_t *memory = (volatile uint8_t *)ml_io_map_wcomb(ZAP_MEMORY, ZAP_MEMORY_SIZE);
++	if (memory == NULL) {
++		return false;
++	}
++	for (uint32_t i = 0; i < 0x1000; i++) {
++		memory[i] = i < seg_size ? segment[i] : 0;
++	}
++	__asm__ volatile ("dsb sy" ::: "memory");
++	announce("ask TrustZone to authenticate and start the zap shader");
++	if (scm("to authenticate the zap shader", SCM_64 | SCM_SIP | SCM_PAS_AUTH_AND_RESET, SCM_ONE_VALUE, PAS_GPU, 0, 0,
++	    &answer) != 0 || answer != 0) {
++		printf("SWEET GPU: %u: TrustZone does not authenticate it (%#llx)\n", step, answer);
++		return false;
++	}
++	zap_loaded = true;
++	printf("SWEET GPU: %u: TRUSTZONE HAS AUTHENTICATED AND STARTED THE ZAP SHADER\n", step);
+ 	return true;
+ }
+ 
++/* ---- step 17: the 3D core's memory: SMMU context 0, stream 0 ---- */
++
++#define PTE_UNPRIVILEGED        (1ull << 6)
++#define PTE_READ_ONLY           (1ull << 7)
++#define PTE_CORE                (PTE_GMU | PTE_UNPRIVILEGED)
++#define CORE_RING_ADDRESS       0x01000000u
++#define CORE_RING_SIZE          0x8000u         /* kgsl KGSL_RB_SIZE */
++#define CORE_SQE_ADDRESS        0x01100000u
++#define CORE_SCRATCH_ADDRESS    0x01200000u
++#define CORE_TARGET_ADDRESS     0x10000000u
++#define SMMU_SCTLR_SERVE_AFTER_FAULT (1u << 8)
++
++static struct gpu_space core_space = { .name = "the 3D core", .context = 0, .match = 0, .stream = 0 };
++static struct gpu_block core_ring, core_sqe, core_scratch, core_target;
++static bool core_space_on, core_runs;
++#define RING_WORDS              (CORE_RING_SIZE / 4)
++static uint32_t ring_at, ring_sent;
++
++static bool
++step_core_space(void)
++{
++	uint32_t size = 0;
++	if (!gx_on) {
++		printf("SWEET GPU: %u: needs GX power (step 14)\n", step);
++		return false;
++	}
++	const uint8_t *sqe = firmware_file("a630_sqe.fw", &size);
++	if (sqe == NULL || size < 8 || size > 0x40000) {
++		return false;
++	}
++	announce("make the 3D core's ring, microcode (a630_sqe.fw less its first word, as kgsl) and scratch page");
++	if (!block_new(&core_space, &core_ring, CORE_RING_ADDRESS, CORE_RING_SIZE, PTE_CORE) ||
++	    !block_new(&core_space, &core_sqe, CORE_SQE_ADDRESS, size - 4, PTE_CORE | PTE_READ_ONLY) ||
++	    !block_new(&core_space, &core_scratch, CORE_SCRATCH_ADDRESS, 4096, PTE_CORE)) {
++		return false;
++	}
++	memcpy((void *)core_sqe.memory, sqe + 4, size - 4);
++	to_memory(core_sqe.memory, core_sqe.size);
++	announce("SMMU context 0 with these tables; the 3D core's stream 0 through it (stream match 0)");
++	core_space_on = space_on(&core_space);
++	if (core_space_on) {
++		/* after a fault the core's other requests are still served (Linux qcom_adreno_smmu_write_sctlr) */
++		uint32_t context = smmu_context(&core_space);
++		put(&smmu, "cb sctlr (+serve after fault)", context + SMMU_CB_SCTLR, SMMU_SCTLR_ON | SMMU_SCTLR_SERVE_AFTER_FAULT);
++	}
++	return core_space_on;
++}
++
++/* ---- step 18: the 3D core initialized, its command processor started ---- */
++
++#define RBBM_INT_0_STATUS       GPU_WORD(0x0201)
++#define CP_RB_BASE              GPU_WORD(0x0800)
++#define CP_RB_CNTL              GPU_WORD(0x0802)
++#define CP_RB_RPTR_ADDR         GPU_WORD(0x0804)
++#define CP_RB_RPTR              GPU_WORD(0x0806)
++#define CP_RB_WPTR              GPU_WORD(0x0807)
++#define CP_SQE_CNTL             GPU_WORD(0x0808)
++#define CP_INTERRUPT_STATUS     GPU_WORD(0x0823)
++#define CP_PROTECT_STATUS       GPU_WORD(0x0824)
++#define CP_SQE_INSTR_BASE       GPU_WORD(0x0830)
++#define CP_RB_CNTL_VALUE        (1u << 27 | 2u << 8 | 12u)      /* A6XX_CP_RB_CNTL_DEFAULT for 8192 dwords */
++#define CP_NOP                  0x10
++#define CP_WAIT_FOR_IDLE        0x26
++#define CP_BLIT                 0x2c
++#define CP_MEM_WRITE            0x3d
++#define CP_EVENT_WRITE          0x46
++#define CP_ME_INIT              0x48
++#define CP_SET_MARKER           0x65
++#define CP_SET_SECURE_MODE      0x66
++
++static uint32_t
++odd_parity(uint32_t v)
++{
++	return 0x9669 >> (0xf & (v ^ v >> 4 ^ v >> 8 ^ v >> 12 ^ v >> 16 ^ v >> 20 ^ v >> 24 ^ v >> 28)) & 1;
++}
++
++static void
++ring(uint32_t word)
++{
++	((uint32_t *)core_ring.memory)[ring_at] = word;
++	ring_at = (ring_at + 1) % RING_WORDS;
++}
++
++static void
++ring_command(uint32_t command, uint32_t words)
++{
++	ring(7u << 28 | words | odd_parity(words) << 15 | command << 16 | odd_parity(command) << 23);
++}
++
++static void
++ring_register(uint32_t number, uint32_t value)
++{
++	ring(4u << 28 | 1 | odd_parity(1) << 7 | number << 8 | odd_parity(number) << 27);
++	ring(value);
++}
++
++static bool
++ring_run(const char *what)
++{
++	uint32_t taken = ~0u, status = ~0u;
++	printf("SWEET GPU: %u: about to have the 3D core %s (ring up to word %u)\n", step, what, ring_at);
++	hold();
++	if (ring_at >= ring_sent) {
++		to_memory(core_ring.memory + 4 * ring_sent, 4 * (ring_at - ring_sent));
++	} else {
++		to_memory(core_ring.memory + 4 * ring_sent, 4 * (RING_WORDS - ring_sent));
++		to_memory(core_ring.memory, 4 * ring_at);
++	}
++	ring_sent = ring_at;
++	wr(core.base + CP_RB_WPTR, ring_at);
++	for (int i = 0; i < 20000 && (taken != ring_at || (status & ~1u)); i++) {
++		delay(100);
++		taken = rd(core.base + CP_RB_RPTR);
++		status = rd(core.base + RBBM_STATUS);
++	}
++	if (taken == ring_at && !(status & ~1u) && rd(core.base + CP_HW_FAULT) == 0 && !space_faulted(&core_space)) {
++		printf("SWEET GPU: %u: the 3D core has done it (rptr %u, status %#x)\n", step, taken, status);
++		return true;
++	}
++	printf("SWEET GPU: %u: the 3D core does not get through: rptr %u of %u, status %#x, int %#x, cp fault %#x, "
++	    "cp int %#x, protect %#x\n", step, taken, ring_at, status, rd(core.base + RBBM_INT_0_STATUS),
++	    rd(core.base + CP_HW_FAULT), rd(core.base + CP_INTERRUPT_STATUS), rd(core.base + CP_PROTECT_STATUS));
++	space_faulted(&core_space);
++	return false;
++}
++
++static void
++put64(struct block *b, const char *name, uint32_t offset, uint64_t value)
++{
++	put(b, name, offset, (uint32_t)value);
++	put(b, name, offset + 4, (uint32_t)(value >> 32));
++}
++
++static bool
++step_core_start(void)
++{
++	if (!core_space_on) {
++		printf("SWEET GPU: %u: needs step 17\n", step);
++		return false;
++	}
++	announce("write the a618 init of kgsl a6xx_start (no clock gating, protection or counters beyond busy)");
++	put(&core, "gbif_halt", GPU_WORD(0x3c45), 0);
++	put(&core, "rbbm_gbif_halt", GPU_WORD(0x0016), 0);
++	put(&core, "rbbm_vbif_client_qos_cntl", GPU_WORD(0x0010), 3);           /* a615_gbif[] */
++	put(&core, "rbbm_perfctr_gpu_busy_masked", GPU_WORD(0x050b), 0xffffffff);
++	put64(&core, "uche_write_range_max", GPU_WORD(0x0e05), 0x0001ffffffffffc0ull);
++	put64(&core, "uche_trap_base", GPU_WORD(0x0e09), 0x0001fffffffff000ull);
++	put64(&core, "uche_write_thru_base", GPU_WORD(0x0e07), 0x0001fffffffff000ull);
++	put64(&core, "uche_gmem_range_min", GPU_WORD(0x0e0b), 0x100000);          /* ALIGN(512K gmem, 1M) */
++	put64(&core, "uche_gmem_range_max", GPU_WORD(0x0e0d), 0x100000 + 0x80000 - 1);
++	put(&core, "uche_filter_cntl", GPU_WORD(0x0e18), 0x804);
++	put(&core, "uche_cache_ways", GPU_WORD(0x0e17), 0x4);
++	put(&core, "cp_roq_thresholds_2", GPU_WORD(0x08c2), 0x010000c0);
++	put(&core, "cp_roq_thresholds_1", GPU_WORD(0x08c1), 0x8040362c);
++	put(&core, "cp_mem_pool_size", GPU_WORD(0x08c3), 128);
++	put(&core, "pc_dbg_eco_cntl", GPU_WORD(0x9e00), 0x300 << 11);
++	put(&core, "cp_ahb_cntl", GPU_WORD(0x098d), 1);
++	put(&core, "rbbm_perfctr_cntl", GPU_WORD(0x0500), 1);
++	/* DT: highest-bank-bit 14 -> 1, min-access-length 32 -> 0, ubwc-mode 2 (UBWC 2.0) -> 0 */
++	put(&core, "rb_nc_mode_cntl", GPU_WORD(0x8e08), 1u << 1);
++	put(&core, "tpl1_nc_mode_cntl", GPU_WORD(0xb604), 1u << 1);
++	put(&core, "sp_nc_mode_cntl", GPU_WORD(0xae02), 1u << 1);
++	put(&core, "uche_mode_cntl", GPU_WORD(0x0e01), 1u << 21);
++	put(&core, "rbbm_interface_hang_int_cntl", GPU_WORD(0x001f), 1u << 30 | 0xcfffff);
++	put(&core, "uche_client_pf", GPU_WORD(0x0e19), 1);
++	announce("the ring, its read pointer copy, the microcode; then start the command processor");
++	put64(&core, "cp_rb_rptr_addr", CP_RB_RPTR_ADDR, CORE_SCRATCH_ADDRESS + 0x800);
++	put(&core, "cp_rb_cntl", CP_RB_CNTL, CP_RB_CNTL_VALUE);
++	put64(&core, "cp_rb_base", CP_RB_BASE, CORE_RING_ADDRESS);
++	put64(&core, "cp_sqe_instr_base", CP_SQE_INSTR_BASE, CORE_SQE_ADDRESS);
++	get(&core, "rbbm_status", RBBM_STATUS);
++	core_runs = true;
++	put(&core, "cp_sqe_cntl", CP_SQE_CNTL, 1);
++	sleep_ms(20);
++	printf("SWEET GPU: %u: after start: status %#x, int %#x, cp fault %#x, cp int %#x, rptr %u\n", step,
++	    rd(core.base + RBBM_STATUS), rd(core.base + RBBM_INT_0_STATUS), rd(core.base + CP_HW_FAULT),
++	    rd(core.base + CP_INTERRUPT_STATUS), rd(core.base + CP_RB_RPTR));
++	if (space_faulted(&core_space)) {
++		return false;
++	}
++	announce("CP_ME_INIT (Linux a6xx_cp_init: mask 0x2f, 3 contexts, error detection)");
++	ring_command(CP_ME_INIT, 8);
++	ring(0x0000002f);
++	ring(0x00000003);
++	ring(0x20000000);
++	for (int i = 0; i < 5; i++) {
++		ring(0);
++	}
++	if (!ring_run("initialize its command processor")) {
++		return false;
++	}
++	printf("SWEET GPU: %u: THE 3D CORE TAKES COMMANDS\n", step);
++	return true;
++}
++
++/* ---- step 19: out of secure mode; a word written on command ---- */
++
++static bool core_free;
++
++static bool
++step_core_commands(void)
++{
++	if (!core_runs) {
++		return false;
++	}
++	announce("command the core out of secure mode (the zap shader's job), then to write a word");
++	ring_command(CP_SET_SECURE_MODE, 1);
++	ring(0);
++	if (!ring_run("leave secure mode")) {
++		return false;
++	}
++	ring_command(CP_MEM_WRITE, 3);
++	ring(CORE_SCRATCH_ADDRESS);
++	ring(0);
++	ring(0x600dc0de);
++	if (!ring_run("write a word to memory")) {
++		return false;
++	}
++	to_memory(core_scratch.memory, 64);
++	uint32_t word = ((volatile uint32_t *)core_scratch.memory)[0];
++	printf("SWEET GPU: %u: the page reads %#x: %s\n", step, word,
++	    word == 0x600dc0de ? "THE 3D CORE WRITES OUR MEMORY ON COMMAND" : "not what it was told");
++	core_free = word == 0x600dc0de;
++	return core_free;
++}
++
++/* ---- step 20: a picture filled by the 2D engine (HackiOS step 22, Mesa fd6_clear_surface) ---- */
++
++#define RB_CCU_CNTL             0x8e07
++#define GRAS_2D_BLIT_CNTL       0x8400
++#define GRAS_2D_DST_TL          0x8405
++#define GRAS_2D_DST_BR          0x8406
++#define RB_2D_BLIT_CNTL         0x8c00
++#define RB_2D_PIXEL_CNTL        0x8c01
++#define RB_2D_DST_INFO          0x8c17
++#define RB_2D_DST               0x8c18
++#define RB_2D_DST_PITCH         0x8c1a
++#define RB_2D_SRC_SOLID_C0      0x8c2c
++#define SP_2D_DST_FORMAT        0xacc0
++#define FORMAT_8888             0x30
++#define BLIT_SOLID_8888         (1u << 7 | FORMAT_8888 << 8 | 0xfu << 20 | 0x10u << 24)
++#define DST_BGRA_LINEAR         (FORMAT_8888 | 1u << 10)
++#define EVENT_FLUSH_COLOR       0x1d
++#define EVENT_CACHE_FLUSH       0x04
++#define TARGET_WIDTH            1080
++#define TARGET_HEIGHT           2400
++#define TARGET_ROW              4352
++
++static void
++ring_fill(uint32_t top, uint32_t bottom, uint32_t red, uint32_t green, uint32_t blue)
++{
++	ring_register(GRAS_2D_DST_TL, top << 16);
++	ring_register(GRAS_2D_DST_BR, (TARGET_WIDTH - 1) | (bottom - 1) << 16);
++	ring_register(RB_2D_SRC_SOLID_C0, red);
++	ring_register(RB_2D_SRC_SOLID_C0 + 1, green);
++	ring_register(RB_2D_SRC_SOLID_C0 + 2, blue);
++	ring_register(RB_2D_SRC_SOLID_C0 + 3, 255);
++	ring_register(RB_2D_BLIT_CNTL, BLIT_SOLID_8888);
++	ring_register(GRAS_2D_BLIT_CNTL, BLIT_SOLID_8888);
++	ring_register(SP_2D_DST_FORMAT, 1 | FORMAT_8888 << 3 | 0xfu << 12);
++	ring_register(RB_2D_PIXEL_CNTL, 0);
++	ring_register(RB_2D_DST_INFO, DST_BGRA_LINEAR);
++	ring_register(RB_2D_DST, CORE_TARGET_ADDRESS);
++	ring_register(RB_2D_DST + 1, 0);
++	ring_register(RB_2D_DST_PITCH, TARGET_ROW >> 6);
++	ring_command(CP_WAIT_FOR_IDLE, 0);
++	ring_command(CP_BLIT, 1);
++	ring(3);
++}
++
++static bool
++step_frame(void)
++{
++	if (!core_free) {
++		printf("SWEET GPU: %u: needs step 19\n", step);
++		return false;
++	}
++	announce("a picture's worth of memory (10 MB) and three bands of colour filled by the 2D engine");
++	if (!block_new(&core_space, &core_target, CORE_TARGET_ADDRESS, TARGET_ROW * TARGET_HEIGHT, PTE_CORE)) {
++		return false;
++	}
++	for (uint32_t i = 0; i < core_space.table_count; i++) {
++		to_memory((vm_offset_t)core_space.tables[i].table, 4096);
++	}
++	ring_command(CP_SET_MARKER, 1);
++	ring(12);
++	ring_register(RB_CCU_CNTL, (0x10000u >> 12) << 21); /* Mesa a6xx gen1 (a618) ccu_offset_bypass 0x10000, COLOR_OFFSET in 4K at bit 21 */
++	ring_fill(0, 800, 255, 128, 0);
++	ring_fill(800, 1600, 255, 255, 255);
++	ring_fill(1600, TARGET_HEIGHT, 0, 128, 255);
++	ring_command(CP_EVENT_WRITE, 4);
++	ring(EVENT_FLUSH_COLOR);
++	ring(CORE_SCRATCH_ADDRESS + 32);
++	ring(0);
++	ring(0x0c0c0c0c);
++	ring_command(CP_EVENT_WRITE, 4);
++	ring(EVENT_CACHE_FLUSH);
++	ring(CORE_SCRATCH_ADDRESS + 16);
++	ring(0);
++	ring(0x0d0e0d0e);
++	ring_command(CP_WAIT_FOR_IDLE, 0);
++	if (!ring_run("fill a picture")) {
++		return false;
++	}
++	to_memory(core_target.memory, core_target.size);
++	const volatile uint8_t *pixel = (const volatile uint8_t *)core_target.memory;
++	printf("SWEET GPU: %u: pixels (BGRA): first %02x %02x %02x %02x (told 00 80 ff ff), middle %02x %02x %02x %02x, "
++	    "last row %02x %02x %02x %02x\n", step, pixel[0], pixel[1], pixel[2], pixel[3],
++	    pixel[1200 * TARGET_ROW + 2160], pixel[1200 * TARGET_ROW + 2161], pixel[1200 * TARGET_ROW + 2162],
++	    pixel[1200 * TARGET_ROW + 2163], pixel[2399 * TARGET_ROW + 4316], pixel[2399 * TARGET_ROW + 4317],
++	    pixel[2399 * TARGET_ROW + 4318], pixel[2399 * TARGET_ROW + 4319]);
++	bool good = pixel[0] == 0x00 && pixel[1] == 0x80 && pixel[2] == 0xff && pixel[1200 * TARGET_ROW + 2160] == 0xff &&
++	    pixel[2399 * TARGET_ROW + 4318] == 0x00 && pixel[2399 * TARGET_ROW + 4316] == 0xff;
++	printf("SWEET GPU: %u: %s\n", step, good ? "THE GPU DRAWS: three bands as told" : "the picture is not as told");
++	return good;
++}
++
+ /* ---- driver ---- */
+ 
+ static bool (*const steps[])(void) = {
+ 	NULL, step_outside, step_fuses, step_gpucc, step_cx_power, step_clocks, step_first_words,
+ 	step_rscc, step_pdc, step_smmu, step_gmu_space, step_rpmh_ucode, step_gmu_firmware, step_gmu_start,
+-	step_gx_on, step_core_read,
++	step_gx_on, step_core_read, step_zap, step_core_space, step_core_start, step_core_commands, step_frame,
+ };
+ 
+ static void

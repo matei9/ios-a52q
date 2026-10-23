@@ -130,7 +130,8 @@ may need GX). Not pushed until CI of 0086 finishes (avoid cancel).
 header said 6 old lines, there were 5; 0087 same). blacktop's build only warns on a skipped patch. Fixed both headers,
 verified with git apply --check on a synthetic tree. ALWAYS check `gh run view ID --log | grep "Skipping patch"` (only
 blacktop's TrustCache/iobuffermemd_monterey/skywalk_sonoma/syntax_checker_sonoma are expected) and `strings` the kernel.
-Boot 19:45:47 used that 0086 kernel = 0085 code + cpus=8 sweetcpufreq=1 (cpufreq absent; tests cpus=8 only).
+Boot 19:45:47 used that 0086 kernel = 0085 code + cpus=8 sweetcpufreq=1 (cpufreq absent; tests cpus=8 only): **8/8 CPUs
+initialized on the A52** (cpu6/7 = A76 at MPIDR 0x600/0x700, PSCI CPU_ON rc=0, SGI1 OK), USB ping OK.
 Android data is gone (approved); stock boot in backup/a52q/boot.img.
 
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes

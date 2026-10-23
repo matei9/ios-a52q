@@ -661,3 +661,14 @@ softpipe+freedreno for arm64-apple-ios16.5 via tools/mk-mesa.sh (host clang 23.1
 CAVEAT: HackiOS libredwood.dylib (inject.c) hooks shared-cache addresses of iOS 16.5 20F66 (checked before use);
 we run 16.7.16 20H392 -> those hooks will refuse; eagl.c (libredwood-gl) uses ObjC swizzling (version-independent).
 Options: move our root to 16.5 20F66 like HackiOS, or port the address hooks we need.
+
+**Stage 6 userland built (2026-10-23 21:20):** Mesa libOSMesa.8.dylib (freedreno+softpipe, 14.9 MB, 1296 gl* exports;
+mk-mesa.sh needed xnu-clang++ link, and install_name_tool/nm from ~/theos/toolchain/linux/iphone/bin for its last
+lines), HackiOS libredwood-gl.dylib (eagl.c + gl_osmesa.c; mkeagl 409 entries) and gl_test. eagl.c has no
+16.5-address hooks (its shared-cache use only prints callers) -> should work on 16.7.16. HackiOS libredwood.dylib is
+NOT used (16.5 window-server address hooks + own touch); ours: `userland/sweet_gl_loader.c` -> libsweet-gl.dylib
+(backboardd only: if RedwoodGPU service exists and no sweetgl=0, dlopen /redwood/lib/libredwood-gl.dylib).
+`userland/build-gl.sh` stages + ldid -S signs (theos ld64 adds no LC_CODE_SIGNATURE) into userland/out/redwood/lib.
+`tools/a52q-install-gl.sh` (phone in TWRP, sudo): pull 16 GiB root -> research/phone-root.img, copy, fsck, mount,
+/redwood/lib + launchd.plist backboardd EnvironmentVariables DYLD_INSERT_LIBRARIES=/redwood/lib/libsweet-gl.dylib,
+sparsediff -> fastbootd flash userdata (changed blocks only). Not run yet. Needs AMFI patch 0094 for dyld to honour it.

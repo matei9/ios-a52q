@@ -1,8 +1,44 @@
 diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
-index 6e4ce4b..b33bfba 100644
+index 6e4ce4b..4a8db51 100644
 --- a/bsd/dev/sweet_touch.c
 +++ b/bsd/dev/sweet_touch.c
-@@ -172,8 +172,14 @@ touch_clocks(void)
+@@ -81,7 +81,7 @@ void sweet_touch_init(void);
+ 
+ static struct {
+ 	vm_offset_t se, gcc, gpio;
+-	uint32_t gcc_vote;
++	uint32_t gcc_vote, clk_level;
+ 	bool started, dead, probing;
+ 	int kind, irq_hint;
+ 	uint32_t irq_status, irq_last, active;
+@@ -153,10 +153,22 @@ touch_clocks(void)
+ 	printf("SWEET TOUCH: gcc vote=%#x rcg=%#x cfg=%#x dfs=%#x\n",
+ 	    touch_rd(st.gcc, TOUCH_GCC_VOTE), touch_rd(st.gcc, TOUCH_RCG), cfg, dfs);
+ 	if (dfs & 1u) {
+-		/* SE CLK_SEL=0 selects DFS performance level 0. Do not alter tables. */
+-		cfg = touch_rd(st.gcc, TOUCH_RCG + 0x1cu);
+-		if ((cfg & 0x371fu) != 1u) {
+-			printf("SWEET TOUCH: DFS level0=%#x is not XO/1; need clock integration\n", cfg);
++		/*
++		 * SE CLK_SEL=n selects DFS performance level n (SE_PERF_DFSR(n) = RCG +
++		 * 0x1c + 4n, clk-rcg2.c). Use the first XO/1 level (19.2 MHz, no MND):
++		 * level 0 on sweet; the a52q firmware table is unknown. Do not alter tables.
++		 */
++		bool found = false;
++		for (uint32_t level = 0; level < 8 && !found; ++level) {
++			cfg = touch_rd(st.gcc, TOUCH_RCG + 0x1cu + 4u * level);
++			printf("SWEET TOUCH: DFS level%u=%#x\n", level, cfg);
++			if ((cfg & 0x371fu) == 1u) {
++				st.clk_level = level;
++				found = true;
++			}
++		}
++		if (!found) {
++			printf("SWEET TOUCH: no XO/1 DFS level; need clock integration\n");
+ 			return false;
+ 		}
+ 	} else {
+@@ -172,8 +184,14 @@ touch_clocks(void)
  	const uint32_t branches[] = {0x18004, 0x18008, 0x1800c, 0x18010, 0x18144};
  	for (unsigned i = 0; i < sizeof(branches) / sizeof(branches[0]); ++i) {
  		if (!touch_wait_clear(st.gcc, branches[i], 1u << 31)) {
@@ -19,6 +55,15 @@ index 6e4ce4b..b33bfba 100644
  			return false;
  		}
  	}
+@@ -644,7 +662,7 @@ touch_se_init(void)
+ 	touch_wr(st.se, 0xe30, touch_rd(st.se, 0xe30) | 0x0fu);
+ 	touch_wr(st.se, 0x24, 0x7f);
+ 	touch_wr(st.se, 0x20, 1);
+-	touch_wr(st.se, SE_CLK_SEL, 0);
++	touch_wr(st.se, SE_CLK_SEL, st.clk_level);
+ 	touch_wr(st.se, SE_MCLK, (7u << 4) | 1u);
+ 	touch_wr(st.se, SE_SCL, (10u << 20) | (11u << 10) | 26u); /* 100 kHz */
+ 	/* Linux 8-bit I2C packing: MSB on the wire, LSB byte first in FIFO. */
 diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
 index 0fc530b..ab62209 100644
 --- a/bsd/dev/sweet_usb.c

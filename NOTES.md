@@ -79,7 +79,8 @@ database reseed finished in < 20 min). Power + volume buttons work (user-confirm
 - Touch: vote 0x52008 = 0x49bc43c0 (our bits set), then `GCC branch 0x18010 halted (0x8000000a)`: CBCR HW_CTL bit1
   set -> hardware-gated wrap1 s_ahb reads halted while idle (gcc-atoll.c hwcg_bit 1).
 **Patch 0084:** USB: QSCRATCH_GENERAL_CFG (0xa6f8808) UTMI switch (CLK_DIS, CLK_SEL|PHYSTATUS_SW, ~CLK_DIS) as
-dwc3-msm POST_RESET does for maximum-speed high-speed (A52 DT); touch: accept HW_CTL-gated branches.
+dwc3-msm POST_RESET does for maximum-speed high-speed (A52 DT); touch: accept HW_CTL-gated branches; search DFS levels
+0..7 (RCG+0x1c+4n) for XO/1 and program SE_CLK_SEL with it (sweet assumed level 0). First CI run of 0084 cancelled to add this.
 Android data is gone (approved); stock boot in backup/a52q/boot.img.
 
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes

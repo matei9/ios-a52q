@@ -1,0 +1,69 @@
+diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
+index 1ff1ec5..9dac8da 100644
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -789,6 +789,64 @@ IOSurfaceRootUserClient::externalMethod(uint32_t selector, IOExternalMethodArgum
+ 		sweet_surf_log_once("sel", selector);
+ 		return kIOReturnSuccess;
+ 	}
++	case 6:         /* WrapClientImage */
++	case 7:         /* WrapClientMemory */
++		/*
++		 * Not supported, and it must say so: with "success" and a zeroed result CoreAnimation's
++		 * OpenGL ES renderer took a surface with no shared state and read its bulk attachments at
++		 * address 0x30 (boot 0099, backboardd SIGSEGV in IOSurfaceClientGetBulkAttachments via
++		 * CA::WindowServer::IOSurface::wrap_buffer). HackiOS's IOSurface answers Unsupported too,
++		 * and CoreAnimation falls back to copying the image.
++		 */
++		sweet_surf_log_once("sel", selector);
++		return kIOReturnUnsupported;
++	case 27: {      /* SetBulkAttachments: colour space and the like, kept at +0x30 of the shared page */
++		/*
++		 * HackiOS MiniIOSurface.cpp methodSetBulkAttachments (OOSEX GANG, APSL 2.0): the request is the
++		 * 0x70-byte structure, its size at +0x70, a mask of changed fields at +0x78, the surface id at +0x80.
++		 */
++		static const struct {
++			uint8_t from, to;
++		} fields[15] = {
++			{ 0x00, 0x20 }, { 0x20, 0x30 }, { 0x30, 0x38 }, { 0x38, 0x39 }, { 0x39, 0x3a }, { 0x3a, 0x3b }, { 0x3b, 0x3c },
++			{ 0x3c, 0x3d }, { 0x3d, 0x3e }, { 0x3e, 0x3f }, { 0x3f, 0x40 }, { 0x40, 0x58 }, { 0x58, 0x5c }, { 0x5c, 0x64 },
++			{ 0x64, 0x65 },
++		};
++		const uint8_t *in = (const uint8_t *)args->structureInput;
++		size_t in_size = args->structureInputSize;
++		IOMemoryMap *in_map = NULL;
++		uint64_t size, mask;
++		uint32_t sid;
++		IOReturn ret = kIOReturnNotFound;
++		if (args->structureInputDescriptor != NULL) {
++			in_map = args->structureInputDescriptor->map(kIOMapReadOnly);
++			if (in_map == NULL) {
++				return kIOReturnNoMemory;
++			}
++			in = (const uint8_t *)in_map->getVirtualAddress();
++			in_size = in_map->getLength();
++		}
++		if (in == NULL || in_size < 0x88) {
++			OSSafeReleaseNULL(in_map);
++			return kIOReturnBadArgument;
++		}
++		memcpy(&size, in + 0x70, sizeof(size));
++		memcpy(&mask, in + 0x78, sizeof(mask));
++		memcpy(&sid, in + 0x80, sizeof(sid));
++		SweetSurface *surface = size <= 0x70 ? sweet_surface_copy(sid) : NULL;
++		if (surface != NULL && surface->state != NULL) {
++			uint8_t *attachments = (uint8_t *)surface->state->getBytesNoCopy() + 0x30;
++			for (unsigned i = 0; i < 15; i++) {
++				if ((mask & (1ULL << i)) && fields[i].to <= size) {
++					memcpy(attachments + fields[i].from, in + fields[i].from, fields[i].to - fields[i].from);
++				}
++			}
++			ret = kIOReturnSuccess;
++		}
++		OSSafeReleaseNULL(surface);
++		OSSafeReleaseNULL(in_map);
++		return ret;
++	}
+ 	default:
+ 		/* Values, notifications, ownership, timestamps...: accept and ignore. */
+ 		for (uint32_t i = 0; i < args->scalarOutputCount; i++) {

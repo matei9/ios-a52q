@@ -719,3 +719,12 @@ alpha plane (wide gamut, iPhone X); eagl.c only takes 'BGRA' single-plane. Hacki
 into 'BGRA' in its IOSurface create (MiniIOSurface.cpp:466-479).
 **Patch 0099:** same in SweetSurface sweet_surface_layout ('b3a8' -> BGRA one plane, bpe 4; w30r/l10r/w30R -> BGRA).
 Session restarted 2026-10-24: scratch tree rebuilt from xnu/patches (git apply --include bsd/dev/sweet_*, iokit/Kernel/arm/*).
+
+**Boot 0099 (10:33:16):** 'b3a8' fix works: `-attachImage: texture 1 is IOSurface 2 ('BGRA' 1125 x 2436, 4544 bytes a
+row): a texture, copied into its memory by the GPU`. Then backboardd SIGSEGV far 0x30: _platform_memmove <-
+IOSurfaceClientGetBulkAttachments <- CA::Render::iosurface_get_edr_factor <- CA::WindowServer::IOSurface::wrap_buffer
+<- CA::OGL::GLESContext::retain_image/bind_image_impl (render_contents_background). Cause: SweetSurface answered
+unknown selectors with SUCCESS + zeroed output; sel 6 (WrapClientImage) "succeeded" with a null shared-state pointer.
+HackiOS returns Unsupported for 6/7 and implements 27 (SetBulkAttachments into shared+0x30).
+**Patch 0100:** sel 6/7 -> kIOReturnUnsupported; sel 27 implemented (HackiOS field table, state page +0x30).
+Symbolication: `ipsw dyld a2s research/dyld/dyld_shared_cache_arm64 $((addr - slide))` (ipsw dyld disass crashes).

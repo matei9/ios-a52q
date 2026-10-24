@@ -728,3 +728,11 @@ unknown selectors with SUCCESS + zeroed output; sel 6 (WrapClientImage) "succeed
 HackiOS returns Unsupported for 6/7 and implements 27 (SetBulkAttachments into shared+0x30).
 **Patch 0100:** sel 6/7 -> kIOReturnUnsupported; sel 27 implemented (HackiOS field table, state page +0x30).
 Symbolication: `ipsw dyld a2s research/dyld/dyld_shared_cache_arm64 $((addr - slide))` (ipsw dyld disass crashes).
+
+**🎉🎉 Boot 0100 (10:47:05): iOS IS DRAWN BY THE ADRENO 618.** backboardd/CoreAnimation renders through Mesa freedreno
+("OpenGL ES 3.2 Mesa 25.0.7; FD618"): e.g. `frame 22: 435 GL calls, 53 draws, 212 triangles, 13 clears; 1 textures
+refilled from IOSurfaces (10809 KB) ... 34112 us` (~30-45 fps), screen surface 'BGRA' 1125x2436 attached. User sees
+the lock screen with a wrong red gradient wallpaper and it gets stuck. Log: many `RedwoodGPU: a buffer of 1310720 bytes
+cannot be entered into the GPU's address space` (redwood_gpu_map false: my SPACE_TABLES was 64 -> exhausted by a few
+10 MB surfaces), then backboardd SIGSEGV far 0x18 inside the GL libraries (failed buffers) -> restart.
+**Patch 0101:** SPACE_TABLES 1024, four 4K tables per 16K page (HackiOS space_new_table), log when exhausted.

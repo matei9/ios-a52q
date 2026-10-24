@@ -1,0 +1,43 @@
+diff --git a/bsd/dev/sweet_adreno.c b/bsd/dev/sweet_adreno.c
+index 7ecb096..30da198 100644
+--- a/bsd/dev/sweet_adreno.c
++++ b/bsd/dev/sweet_adreno.c
+@@ -719,7 +719,7 @@ to_memory(vm_offset_t start, vm_size_t size)
+ 	__asm__ volatile ("dsb sy" ::: "memory");
+ }
+ 
+-#define SPACE_TABLES            64
++#define SPACE_TABLES            1024    /* boot 0100: 64 ran out after a few 10 MB surfaces (HackiOS: 1024) */
+ 
+ struct gpu_space {
+ 	const char *name;
+@@ -735,14 +735,23 @@ struct gpu_space {
+ static uint64_t *
+ space_new_table(struct gpu_space *space)
+ {
+-	vm_offset_t page;
+-	if (space->table_count == SPACE_TABLES ||
+-	    kmem_alloc(kernel_map, &page, PAGE_SIZE, KMA_KOBJECT | KMA_ZERO | KMA_DATA, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
++	/* four 4K tables out of each 16K page of ours (HackiOS space_new_table) */
++	static vm_offset_t spare;
++	static unsigned spare_left;
++	if (space->table_count == SPACE_TABLES) {
++		printf("SWEET GPU: %s: out of page tables (%u)\n", space->name, SPACE_TABLES);
+ 		return NULL;
+ 	}
+-	/* one 4K table per 16K page: simple, and the tables are few */
+-	space->tables[space->table_count].phys = kvtophys(page);
+-	space->tables[space->table_count].table = (uint64_t *)page;
++	if (spare_left == 0) {
++		if (kmem_alloc(kernel_map, &spare, PAGE_SIZE, KMA_KOBJECT | KMA_ZERO | KMA_DATA, VM_KERN_MEMORY_IOKIT) !=
++		    KERN_SUCCESS) {
++			return NULL;
++		}
++		spare_left = PAGE_SIZE / 4096;
++	}
++	vm_offset_t table = spare + PAGE_SIZE - 4096 * spare_left--;
++	space->tables[space->table_count].phys = kvtophys(table);
++	space->tables[space->table_count].table = (uint64_t *)table;
+ 	return space->tables[space->table_count++].table;
+ }
+ 

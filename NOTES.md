@@ -786,3 +786,16 @@ slot 0x378 -> 0x1884b2164 GLContext::function_supported, slot 0x388 -> 0x1884b21
 slot 0x060 -> 0x1884053fc Context::compile_shader. function_supported starts `ldr x8,[x0,#0x10]; ldrb w9,[x8,#0x10];
 cmp w9,#89` = same context layout as 16.5. (`ipsw dyld disass` OOMs: use `ipsw dyld dump C ADDR --size N` + llvm-mc.)
 **userland/sweet_gl_loader.c** now installs both hooks after dlopen of the bridge (needs tools/a52q-install-gl.sh).
+
+**Boot 0104 (12:07:48, kernel 0104 + loader with CA function hooks):** `sweet-gl: CoreAnimation's functions without
+shaders are followed`; functions 17,18,20,26,28,32-37,45,53,61,66 report numbers; programless draws: 20 c4p, 28 ds8,
+45 vcm, 53 hom. User: wallpaper now BLACK (= software renderer; red fixed), icons still missing, black after a while.
+Hang: `submission 318 ... rptr 1644 wptr 1865; status 0xee0d95` (VBIF busy as in every hang: a memory transaction
+that never returns). Recovery ran (`3D core was reset: status 0x1, ring at 0`) but CP_ME_INIT never completed after
+it: `status 0xc00015` (VBIF+CP busy) -> GX SW reset does not clear the stuck AXI side; real recovery would need a GX
+power cycle (GDSC off/on + steps 18-20). TODO.
+Icons: the 180x180 fmt-0 surfaces (keys 8) are CoreAnimation's IOSurfaceAddress surfaces = around memory the
+creator already holds (decoded icons). SweetSurface ignored IOSurfaceAddress and gave zeroed memory -> blank icons.
+**Patch 0105:** IOSurfaceAddress -> IOMemoryDescriptor::withAddressRange(creator task, page-aligned only),
+prepare() (InOut, else Out), surface memory = that (cached; kernelMap default cache), complete() on free.
+Next test also with glenv=FD_MESA_DEBUG=nolrz (no build) to check whether LRZ causes the hang.

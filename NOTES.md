@@ -799,3 +799,10 @@ creator already holds (decoded icons). SweetSurface ignored IOSurfaceAddress and
 **Patch 0105:** IOSurfaceAddress -> IOMemoryDescriptor::withAddressRange(creator task, page-aligned only),
 prepare() (InOut, else Out), surface memory = that (cached; kernelMap default cache), complete() on free.
 Next test also with glenv=FD_MESA_DEBUG=nolrz (no build) to check whether LRZ causes the hang.
+
+**Boot 0105 (12:22:09, + glenv=FD_MESA_DEBUG=nolrz):** every IOSurfaceAddress create refused: `memory to make a
+surface around (129600 bytes at 0x1134e2c00) cannot be held: 0xe00002d0` (kIOReturnNotAligned: malloc'd icon
+pictures, 1 KB aligned; 372 creates of 180x180, 38 of 129x129). Hang still came with nolrz: submission 947,
+status 0xef9df5 (later than usual; LRZ not the cause). Recovery again did not restart the CP.
+**Patch 0106:** client memory may start anywhere: the pages around it are held, SweetSurface::pageOffset is added
+to the lock result's base address (0x00) and to RedwoodGPU surfaceBuffer's offset/size.

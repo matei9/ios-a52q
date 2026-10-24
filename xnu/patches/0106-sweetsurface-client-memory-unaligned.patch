@@ -1,0 +1,72 @@
+diff --git a/iokit/Kernel/arm/SweetGPU.cpp b/iokit/Kernel/arm/SweetGPU.cpp
+index 574327c..d62bc41 100644
+--- a/iokit/Kernel/arm/SweetGPU.cpp
++++ b/iokit/Kernel/arm/SweetGPU.cpp
+@@ -858,7 +858,7 @@ RedwoodGPUUserClient::surfaceBuffer(struct redwood_surface * request)
+ 		return kIOReturnNotFound;
+ 	}
+ 	/* SweetSurface: `memory` is the pixels alone (no state page in front, no client-made memory) */
+-	size = round_page_64(s->allocSize);
++	size = round_page_64((uint64_t)s->pageOffset + s->allocSize);   /* (pageOffset: around a client's memory) */
+ 	memory = s->memory != NULL && size <= s->memory->getLength() ?
+ 	    IOSubMemoryDescriptor::withSubRange(s->memory, 0, size, kIODirectionInOut) : NULL;
+ 	if (memory == NULL || size == 0 || size > GPU_BUFFER_MAX) {
+@@ -867,7 +867,7 @@ RedwoodGPUUserClient::surfaceBuffer(struct redwood_surface * request)
+ 		return kIOReturnNoMemory;
+ 	}
+ 	request->size = size;
+-	request->offset = s->offset;
++	request->offset = s->offset + s->pageOffset;
+ 	request->rowBytes = s->bytesPerRow;
+ 	request->width = s->width;
+ 	request->height = s->height;
+diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
+index be3a4de..4df458a 100644
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -588,7 +588,7 @@ static void
+ sweet_surface_fill_result(SweetSurface *s, SweetSurfaceRef *ref, uint8_t *out)
+ {
+ 	bzero(out, SWEET_SURFACE_RESULT_SIZE);
+-	put64(out, 0x00, ref->data->getAddress());
++	put64(out, 0x00, ref->data->getAddress() + s->pageOffset);
+ 	put64(out, 0x08, ref->state->getAddress());
+ 	put64(out, 0x10, ref->state->getAddress() + SWEET_SURFACE_TIMESTAMPS);
+ 	put32(out, 0x18, s->id);
+@@ -712,18 +712,20 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
+ 		 * APSL 2.0): CoreAnimation's OpenGL ES renderer makes them around pictures it holds -- app
+ 		 * icons, layer contents -- to hand them to the GPU as they are. The pixels are that memory,
+ 		 * wired and shared, not a copy. Boot 0104: allocating fresh zeroed memory instead left every
+-		 * icon blank. The GPU maps whole pages from the start, so the memory must start on one.
++		 * icon blank. The memory is malloc'd (boot 0105: 1 KB aligned), so the pages around it are
++		 * held and the pixels start pageOffset into the first: base addresses and GPU offsets add it.
+ 		 */
+ 		uint64_t address = client_address->unsigned64BitValue();
+ 		uint32_t size = sweet_dict_u32(props, "IOSurfaceAllocSize", s->allocSize);
+-		IOReturn held = kIOReturnNotAligned;
++		IOReturn held = kIOReturnBadArgument;
+ 		IOMemoryDescriptor *client = NULL;
+-		if ((address & PAGE_MASK) == 0 && size != 0 && size <= SWEET_SURFACE_MAX_ALLOC) {
++		if (size != 0 && size <= SWEET_SURFACE_MAX_ALLOC) {
+ 			s->allocSize = size;
++			s->pageOffset = (uint32_t)(address & PAGE_MASK);
+ 			/* (held for writing if it can be, which a picture that is only shown need not be) */
+ 			for (unsigned attempt = 0; attempt < 2 && held != kIOReturnSuccess; attempt++) {
+ 				OSSafeReleaseNULL(client);
+-				client = IOMemoryDescriptor::withAddressRange(address, round_page(size),
++				client = IOMemoryDescriptor::withAddressRange(trunc_page_64(address), round_page(s->pageOffset + size),
+ 				    attempt == 0 ? kIODirectionInOut : kIODirectionOut, current_task());
+ 				held = client != NULL ? client->prepare() : kIOReturnNoMemory;
+ 			}
+diff --git a/iokit/Kernel/arm/SweetSurface.h b/iokit/Kernel/arm/SweetSurface.h
+index 08056e9..744c9fc 100644
+--- a/iokit/Kernel/arm/SweetSurface.h
++++ b/iokit/Kernel/arm/SweetSurface.h
+@@ -40,6 +40,7 @@ public:
+ 	IOBufferMemoryDescriptor *state;        /* shared state page, read-only for users */
+ 	IOMemoryMap              *kernelMap;    /* lazily created for kernel copies */
+ 	bool                      clientMemory; /* `memory` is the creator's own (IOSurfaceAddress), prepared */
++	uint32_t                  pageOffset;   /* ... where in its first page the pixels start */
+ 
+ 	bool init() APPLE_KEXT_OVERRIDE { return OSObject::init(); }
+ 	void free() APPLE_KEXT_OVERRIDE;

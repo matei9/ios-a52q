@@ -1,0 +1,18 @@
+diff --git a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
+index 00568d3..1b53ab5 100644
+--- a/osfmk/arm/pmap/pmap.c
++++ b/osfmk/arm/pmap/pmap.c
+@@ -6881,7 +6881,12 @@ void
+ pmap_sync_page_attributes_phys(
+ 	ppnum_t pp)
+ {
+-	flush_dcache((vm_offset_t) (pp << PAGE_SHIFT), PAGE_SIZE, TRUE);
++	/*
++	 * SWEET: ptoa(), not (pp << PAGE_SHIFT): ppnum_t is 32 bits, so the shift dropped bit 32 of
++	 * every page above 4 GiB (all of the Samsung A52's RAM): making such a page write-combined or
++	 * uncached panicked in phystokv ("illegal PA 0xe0ac8000" for 0x1e0ac8000, boot 0098).
++	 */
++	flush_dcache((vm_offset_t) ptoa(pp), PAGE_SIZE, TRUE);
+ }
+ 
+ #if CONFIG_COREDUMP

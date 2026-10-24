@@ -741,3 +741,13 @@ cannot be entered into the GPU's address space` (redwood_gpu_map false: my SPACE
 HANG: `no answer: submission 33 last, done 30; rptr 924 wptr 954; status 0xe79495 int 0; cp fault 0 int 0 protect 0;
 ib1 0x20478000+627` -> CP stuck inside an IB, no fault/SMMU fault; screen black (frames never completed). First suspect:
 freedreno GMEM (tiled/binning) rendering. Try (no rebuild): glenv=FD_MESA_DEBUG=sysmem -> shim/out/a52q-boot-0101s.img.
+
+**Boot 0101s (11:09:02, + glenv=FD_MESA_DEBUG=sysmem):** user: same red gradient wallpaper, NOT stuck: unlock works,
+but no home-screen icons; opening Settings -> black screen. Log: frames 17-22 ms (up to 105 draws / 1004 triangles),
+then the same kind of hang after submission 363 (`no answer ... rptr 2697 wptr 2712; status 0xef0dd5; no faults`). So
+GMEM is not the cause. kgsl a6xx_start compared: our step-19 init matches it (minus hwcg/protect/power counters); the
+a52q DTB has only quirks hfi-use-reg + secvid-set-once (no limit-uche-gbif-rw).
+Suspect now: gpu_cached=1 (cached buffers, GPU not IO-coherent: CPU reads of GPU-written memory and fences can be
+stale -> wrong textures (red wallpaper) / waits that never end). **Patch 0102** fixes the real WC bug instead:
+osfmk/arm/pmap/pmap.c pmap_sync_page_attributes_phys did `(vm_offset_t)(pp << PAGE_SHIFT)` with 32-bit ppnum_t ->
+bit 32 lost for all A52 RAM; now ptoa(pp). Next boot: WITHOUT gpu_cached=1 (HackiOS default: write-combined).

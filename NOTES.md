@@ -763,3 +763,14 @@ reports msm 1.7 >= FD_VERSION_GMEM_BASE) uses it for GMEM framebuffer fetch (fd6
 **Patch 0103:** GMEM_BASE = 0x100000; on a hang, redwood_gpu_report dumps the IB1/IB2 words around the CP fetch
 pointer (space_lookup walks our GPU page tables) to see which packet it is stuck on.
 Sysmem boot 0101s also hung (later), so GMEM_BASE may not be the only cause. Still TODO: gpu_recover, leak after hang.
+
+**Boot 0103 (11:41:24, GMEM_BASE 0x100000):** hang moved from submission 72 to 1082 (GMEM base was a real bug).
+Photos ~/ls.jpg (lock screen: red gradient with dither, white clock/text fine) and ~/hs.jpg (home screen: black
+background, text labels "Batteries/Photos/App Store/Settings/Waiting...", battery widget + dock + search drawn as pink
+blurred material, NO app icons), then black (hang). IB dump: CP_IB1_BASE does not advance (it is the IB's start),
+so the fetch position is unknown from it; IB1 starts 70e30001 (CP_SET_MARKER?) ... IB2 is a draw state block.
+**Patch 0104:** redwood_gpu_recover() (HackiOS, boot-arg sweetgpurecover, default ON): SQE halt, GMU keepalive,
+GBIF drain/halt, RBBM_SW_RESET_CMD pulse, GMU AHB fence clear, SMMU FSR clear, ring emptied, steps 19+20 again,
+fence = last submission. A hang should now cost one frame.
+Open: blank icons (180x180 surfaces fmt 0 'IOSurface shown' as GL_RGBA textures), red lock wallpaper (is it red in
+the software renderer too? ask user).

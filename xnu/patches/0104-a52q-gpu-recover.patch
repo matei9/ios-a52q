@@ -1,0 +1,94 @@
+diff --git a/bsd/dev/sweet_adreno.c b/bsd/dev/sweet_adreno.c
+index 8b19f9e..3580694 100644
+--- a/bsd/dev/sweet_adreno.c
++++ b/bsd/dev/sweet_adreno.c
+@@ -1983,10 +1983,88 @@ redwood_gpu_stop(void)
+ 	gpu_kept = false;
+ }
+ 
++/*
++ * A core that has stopped answering is reset and started again (boot-arg sweetgpurecover, on unless
++ * 0): HackiOS redwood_adreno.c redwood_gpu_recover() (OOSEX GANG, APSL 2.0), after Linux
++ * a6xx_recover / a6xx_bus_clear_pending_transactions / a6xx_gpu_sw_reset: halt the SQE, keep the
++ * GMU from collapsing power, drain and halt GBIF, pulse RBBM_SW_RESET_CMD (GX only: the SMMU and its
++ * tables stay), clear the GMU's AHB fence, empty the ring, run steps 19 and 20 again and call
++ * every submission so far done. Without it, one hang costs the rest of the run (boots 0100-0103).
++ */
++#define RBBM_SW_RESET_CMD       GPU_WORD(0x0043)
++#define RBBM_INT_CLEAR_CMD      GPU_WORD(0x0038)
++#define RBBM_GBIF_HALT          GPU_WORD(0x0016)
++#define RBBM_GBIF_HALT_ACK      GPU_WORD(0x0017)
++#define GBIF_HALT               GPU_WORD(0x3c45)
++#define GBIF_HALT_ACK           GPU_WORD(0x3c46)
++#define GMU_PWR_COL_KEEPALIVE   KGSL_GMU(0x1f8c3)
++#define GMU_AO_AHB_FENCE_CTRL   KGSL_GMU(0x23b10)
++#define GMU_AHB_FENCE_STATUS_CLR KGSL_GMU(0x23b14)
++#define GPU_RECOVERIES          64
++
++static uint32_t gpu_recoveries;
++
++static void
++gbif_wait(uint32_t reg, uint32_t mask)
++{
++	for (int i = 0; i < 1000 && (rd(core.base + reg) & mask) != mask; i++) {
++		delay(10);
++	}
++}
++
+ bool
+ redwood_gpu_recover(void)
+ {
+-	return false;   /* not yet: a hung core stays hung (HackiOS gpu_recover) */
++	uint32_t recover = 1, fence_status;
++	(void)PE_parse_boot_argn("sweetgpurecover", &recover, sizeof(recover));
++	if (!gpu_kept || !recover) {
++		return false;
++	}
++	if (gpu_recoveries >= GPU_RECOVERIES) {
++		printf("SWEET GPU: recovered %u times already in this run: no more\n", gpu_recoveries);
++		return false;
++	}
++	gpu_recoveries++;
++	wr(core.base + CP_SQE_CNTL, 3);
++	wr(gmu.base + GMU_PWR_COL_KEEPALIVE, 1);
++	wr(core.base + RBBM_GBIF_HALT, 1);
++	gbif_wait(RBBM_GBIF_HALT_ACK, 1);
++	wr(core.base + GBIF_HALT, 1);
++	gbif_wait(GBIF_HALT_ACK, 1);
++	wr(core.base + GBIF_HALT, 2);
++	gbif_wait(GBIF_HALT_ACK, 2);
++	wr(core.base + GBIF_HALT, 0);
++	wr(core.base + RBBM_SW_RESET_CMD, 1);
++	(void)rd(core.base + RBBM_SW_RESET_CMD);
++	delay(101);
++	wr(core.base + RBBM_SW_RESET_CMD, 0);
++	(void)rd(core.base + RBBM_SW_RESET_CMD);
++	delay(1);
++	fence_status = rd(gmu.base + GMU_AHB_FENCE_STATUS);
++	wr(gmu.base + GMU_AHB_FENCE_STATUS_CLR, 7);
++	wr(gmu.base + GMU_AO_AHB_FENCE_CTRL, 0);
++	ring_at = ring_sent = rd(core.base + CP_RB_RPTR) % RING_WORDS;
++	wr(core.base + CP_RB_WPTR, ring_at);
++	wr(core.base + RBBM_INT_CLEAR_CMD, rd(core.base + RBBM_INT_0_STATUS));
++	printf("SWEET GPU: the 3D core was reset: status %#x, ring at %u, the GMU had dropped writes %#x\n",
++	    rd(core.base + RBBM_STATUS), ring_at, fence_status);
++	/* a fault the SMMU still holds would fail step 19's check: it is reported above, and cleared */
++	uint32_t context = smmu_context(&core_space);
++	wr(smmu.base + context + SMMU_CB_FSR, rd(smmu.base + context + SMMU_CB_FSR));
++	core_runs = false;
++	core_free = false;
++	if (!step_core_start() || !step_core_commands()) {
++		printf("SWEET GPU: THE 3D CORE DOES NOT TAKE COMMANDS AGAIN after the reset: given up for this run\n");
++		wr(gmu.base + GMU_PWR_COL_KEEPALIVE, 0);
++		return false;
++	}
++	wr(gmu.base + GMU_PWR_COL_KEEPALIVE, 0);
++	bzero((void *)core_scratch.memory, 4096);
++	*(volatile uint32_t *)(core_scratch.memory + GPU_FENCE_AT) = gpu_fence;
++	to_memory(core_scratch.memory, 4096);
++	printf("SWEET GPU: THE 3D CORE IS RECOVERED (%u in this run); submissions up to %u are given up as done\n",
++	    gpu_recoveries, gpu_fence);
++	return true;
+ }
+ 
+ /* msm GET_PARAM (Linux adreno_get_param) for the Adreno 618 */

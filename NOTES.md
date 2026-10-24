@@ -736,3 +736,8 @@ the lock screen with a wrong red gradient wallpaper and it gets stuck. Log: many
 cannot be entered into the GPU's address space` (redwood_gpu_map false: my SPACE_TABLES was 64 -> exhausted by a few
 10 MB surfaces), then backboardd SIGSEGV far 0x18 inside the GL libraries (failed buffers) -> restart.
 **Patch 0101:** SPACE_TABLES 1024, four 4K tables per 16K page (HackiOS space_new_table), log when exhausted.
+
+**Boot 0101 (10:59:32, 1024 page tables):** no more mapping failures; frames 8-13 ms (21 draws, 56 triangles), then GPU
+HANG: `no answer: submission 33 last, done 30; rptr 924 wptr 954; status 0xe79495 int 0; cp fault 0 int 0 protect 0;
+ib1 0x20478000+627` -> CP stuck inside an IB, no fault/SMMU fault; screen black (frames never completed). First suspect:
+freedreno GMEM (tiled/binning) rendering. Try (no rebuild): glenv=FD_MESA_DEBUG=sysmem -> shim/out/a52q-boot-0101s.img.

@@ -751,3 +751,15 @@ Suspect now: gpu_cached=1 (cached buffers, GPU not IO-coherent: CPU reads of GPU
 stale -> wrong textures (red wallpaper) / waits that never end). **Patch 0102** fixes the real WC bug instead:
 osfmk/arm/pmap/pmap.c pmap_sync_page_attributes_phys did `(vm_offset_t)(pp << PAGE_SHIFT)` with 32-bit ppnum_t ->
 bit 32 lost for all A52 RAM; now ptoa(pp). Next boot: WITHOUT gpu_cached=1 (HackiOS default: write-combined).
+
+**Boot 0102 (11:24:14, no gpu_cached: write-combined buffers):** no panic -> 0102 pmap fix works. Still the red
+gradient, then black. Hang at submission 72 (`rptr 2311 wptr 2311; status 0xef05f5; no faults; ib1 0x20558000+85`):
+RBBM_STATUS 0xef05f5 = HLSQ, TPL1, SP, UCHE, VPC, LRZ, CCU, RB, RAS, TSE, VBIF, CP busy (a draw in flight, memory
+side busy). Afterwards buffers freed while their fence never comes are kept forever ("stays its own") -> VA/page
+tables leak -> "out of page tables (1024)" flood -> "cannot be entered" -> backboardd SIGSEGV.
+Found: our MSM_PARAM_GMEM_BASE (0x06) answered 0 (copied from HackiOS, whose a635 is a650-family where 0 is right).
+Linux adreno_get_param gives 0x100000 for a618; step 19 also sets uche_gmem_range at 0x100000. Mesa (redwood-drm
+reports msm 1.7 >= FD_VERSION_GMEM_BASE) uses it for GMEM framebuffer fetch (fd6_gmem.cc) and fd6_resolve_tile.
+**Patch 0103:** GMEM_BASE = 0x100000; on a hang, redwood_gpu_report dumps the IB1/IB2 words around the CP fetch
+pointer (space_lookup walks our GPU page tables) to see which packet it is stuck on.
+Sysmem boot 0101s also hung (later), so GMEM_BASE may not be the only cause. Still TODO: gpu_recover, leak after hang.

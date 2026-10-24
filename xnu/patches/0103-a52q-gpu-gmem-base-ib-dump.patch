@@ -1,0 +1,85 @@
+diff --git a/bsd/dev/sweet_adreno.c b/bsd/dev/sweet_adreno.c
+index 30da198..8b19f9e 100644
+--- a/bsd/dev/sweet_adreno.c
++++ b/bsd/dev/sweet_adreno.c
+@@ -60,6 +60,7 @@
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ extern uint64_t kvtophys(vm_offset_t va);
++extern vm_map_address_t phystokv(uint64_t pa);
+ extern vm_offset_t ml_static_ptovirt(vm_offset_t);
+ extern vm_offset_t ml_io_map_wcomb(vm_offset_t, vm_size_t);
+ extern kern_return_t thread_terminate(thread_t);
+@@ -773,6 +774,29 @@ space_next(struct gpu_space *space, uint64_t *entry)
+ 	return table;
+ }
+ 
++/* the physical address behind a GPU address of the space, or 0 */
++static uint64_t
++space_lookup(struct gpu_space *space, uint64_t address)
++{
++	uint64_t *table = space->root;
++	for (int shift = 30; table != NULL && shift >= 12; shift -= 9) {
++		uint64_t entry = table[address >> shift & 0x1ff];
++		if ((entry & 1) == 0) {
++			return 0;
++		}
++		if (shift == 12) {
++			return (entry & PTE_ADDRESS) | (address & 0xfff);
++		}
++		table = NULL;
++		for (uint32_t i = 0; i < space->table_count; i++) {
++			if (space->tables[i].phys == (entry & PTE_ADDRESS)) {
++				table = space->tables[i].table;
++			}
++		}
++	}
++	return 0;
++}
++
+ static bool
+ space_map(struct gpu_space *space, uint64_t address, uint64_t phys, uint64_t attributes)
+ {
+@@ -1970,9 +1994,17 @@ bool
+ redwood_gpu_parameter(uint32_t which, uint64_t *value)
+ {
+ 	switch (which) {
+-	case 0x01: case 0x06: case 0x08: case 0x09: case 0x0a: case 0x11:
++	case 0x01: case 0x08: case 0x09: case 0x0a: case 0x11:
+ 		*value = 0;
+ 		return true;
++	case 0x06:                              /* GMEM_BASE */
++		/*
++		 * Linux adreno_get_param: 0 only for the a650/a740 families (HackiOS's Adreno 635); every
++		 * other a6xx sees its GMEM through UCHE at 0x100000, where step 19 puts uche_gmem_range.
++		 * With 0, Mesa's GMEM framebuffer fetches and tile resolves read GPU address 0 (boot 0102).
++		 */
++		*value = 0x100000;
++		return true;
+ 	case 0x02:                              /* GMEM_SIZE */
+ 		*value = 512 * 1024;
+ 		return true;
+@@ -2188,6 +2220,23 @@ redwood_gpu_report(const char *why)
+ 	    rd(core.base + CP_INTERRUPT_STATUS), rd(core.base + CP_PROTECT_STATUS), rd(core.base + CP_IB1_BASE),
+ 	    rd(core.base + CP_IB1_REM_SIZE), rd(core.base + CP_IB2_BASE), rd(core.base + CP_IB2_REM_SIZE));
+ 	space_faulted(&core_space);
++	/* the words of the IBs where the command processor fetches (it executes a little behind) */
++	for (int ib = 0; ib < 2; ib++) {
++		uint32_t at = ib == 0 ? CP_IB1_BASE : CP_IB2_BASE;
++		uint64_t address = rd(core.base + at) | (uint64_t)rd(core.base + at + 4) << 32;
++		if (address == 0) {
++			continue;
++		}
++		for (uint64_t va = (address & ~0x7full) - 0x100; va < (address & ~0x7full) + 0x80; va += 0x20) {
++			uint64_t phys = space_lookup(&core_space, va);
++			if (phys == 0) {
++				continue;
++			}
++			const volatile uint32_t *w = (const volatile uint32_t *)phystokv(phys);
++			printf("SWEET GPU: ib%d %#llx: %08x %08x %08x %08x %08x %08x %08x %08x\n", ib + 1, va, w[0], w[1], w[2],
++			    w[3], w[4], w[5], w[6], w[7]);
++		}
++	}
+ }
+ 
+ /* ---- driver ---- */

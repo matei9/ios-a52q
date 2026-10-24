@@ -774,3 +774,15 @@ GBIF drain/halt, RBBM_SW_RESET_CMD pulse, GMU AHB fence clear, SMMU FSR clear, r
 fence = last submission. A hang should now cost one frame.
 Open: blank icons (180x180 surfaces fmt 0 'IOSurface shown' as GL_RGBA textures), red lock wallpaper (is it red in
 the software renderer too? ask user).
+
+**Icons + red wallpaper: cause found (offline, from boot 0103 log + HackiOS sources).** User: in the software renderer
+the lock wallpaper was BLACK, so red is a bug. Log: `redwood-gl: a draw with no program ... texture on the first unit`.
+CoreAnimation's GLES renderer draws its shaderless "functions" (wallpaper "cst" 89, colour matrices 20/45, blurs
+...) with NO program; HackiOS's eagl.c plain_draw_begin() stands in for them but only knows the function and its
+numbers through redwood_gl_function_values(), called from HackiOS inject.c's hooks of the CA::OGL::GLESContext
+vtable (function_supported slot 0x378, function_uniform slot 0x388). Our loader never installed those hooks.
+20H392 addresses (ipsw dyld symaddr/dump/a2s on research/dyld): vtable __ZTVN2CA3OGL11GLESContextE 0x1d5b2f6e8,
+slot 0x378 -> 0x1884b2164 GLContext::function_supported, slot 0x388 -> 0x1884b21ac GLContext::function_uniform,
+slot 0x060 -> 0x1884053fc Context::compile_shader. function_supported starts `ldr x8,[x0,#0x10]; ldrb w9,[x8,#0x10];
+cmp w9,#89` = same context layout as 16.5. (`ipsw dyld disass` OOMs: use `ipsw dyld dump C ADDR --size N` + llvm-mc.)
+**userland/sweet_gl_loader.c** now installs both hooks after dlopen of the bridge (needs tools/a52q-install-gl.sh).

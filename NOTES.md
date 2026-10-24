@@ -711,3 +711,11 @@ ml_static_vtop: "phystokv_range: illegal PA 0xe0ac8000; phys base 0x106000000" =
 WIMG/flush path of this open-source pmap truncates PAs above 4 GiB (A52 RAM is all above 4 GiB). Workaround (no
 rebuild): boot-arg gpu_cached=1 (RedwoodGPU buffers cached, CPU cache pushed out per submission) ->
 shim/out/a52q-boot-0098c.img. Proper fix later: find the 32-bit truncation in pmap/caches.
+
+**Boot 0098c (22:28:52, + gpu_cached=1):** no panic (WC path avoided). backboardd + bridge: renderer string "FD618"
+(Mesa freedreno on the Adreno 618!), GL extensions listed; then `-attachImage: ... IOSurface of 'b3a8': not done`,
+`glDrawElements: error 0x506`, backboardd SIGSEGV far 0x30 -> launchd restart loop (5 times). 'b3a8' = 30-bit RGB +
+alpha plane (wide gamut, iPhone X); eagl.c only takes 'BGRA' single-plane. HackiOS turns 'b3a8'/'w30r'/'l10r'/'w30R'
+into 'BGRA' in its IOSurface create (MiniIOSurface.cpp:466-479).
+**Patch 0099:** same in SweetSurface sweet_surface_layout ('b3a8' -> BGRA one plane, bpe 4; w30r/l10r/w30R -> BGRA).
+Session restarted 2026-10-24: scratch tree rebuilt from xnu/patches (git apply --include bsd/dev/sweet_*, iokit/Kernel/arm/*).

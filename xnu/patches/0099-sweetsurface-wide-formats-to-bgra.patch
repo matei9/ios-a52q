@@ -1,0 +1,37 @@
+diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
+index 7f90c56..1ff1ec5 100644
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -290,6 +290,23 @@ sweet_surface_layout(SweetSurface *s, OSDictionary *props)
+ 	s->pixelFormat = sweet_dict_u32(props, "IOSurfacePixelFormat", 0);
+ 	s->cacheMode = sweet_dict_u32(props, "IOSurfaceCacheMode", 0);
+ 	s->offset = sweet_dict_u32(props, "IOSurfaceOffset", 0);
++	/*
++	 * Wide-gamut formats become plain BGRA (HackiOS MiniIOSurface.cpp, OOSEX GANG, APSL 2.0): the
++	 * iPhone X identity makes CoreAnimation ask for 10-bit 'w30r'/'l10r'/'w30R' snapshots and, once it
++	 * renders with OpenGL ES, for 'b3a8' (30-bit RGB + an alpha plane) screen surfaces. Neither the
++	 * software renderer nor the GL bridge draws into those, and the panel has no wide gamut. The
++	 * surface is made BGRA of the same geometry, one plane, and says so (callers read the format back).
++	 */
++	bool one_plane = false;
++	if (s->pixelFormat == 'w30r' || s->pixelFormat == 'l10r' || s->pixelFormat == 'w30R') {
++		s->pixelFormat = 'BGRA';
++		s->bytesPerElement = 4;
++	} else if (s->pixelFormat == 'b3a8') {
++		s->pixelFormat = 'BGRA';
++		s->bytesPerElement = 4;
++		s->elementWidth = s->elementHeight = 1;
++		one_plane = true;
++	}
+ 	if (s->width > SWEET_SURFACE_MAX_DIM || s->height > SWEET_SURFACE_MAX_DIM ||
+ 	    s->bytesPerElement > 64 || s->elementWidth == 0 || s->elementHeight == 0) {
+ 		return kIOReturnBadArgument;
+@@ -301,7 +318,7 @@ sweet_surface_layout(SweetSurface *s, OSDictionary *props)
+ 	}
+ 	end = (uint64_t)s->offset + (uint64_t)s->bytesPerRow * sweet_div_up(s->height, s->elementHeight);
+ 
+-	OSArray *planes = OSDynamicCast(OSArray, props->getObject("IOSurfacePlaneInfo"));
++	OSArray *planes = one_plane ? NULL : OSDynamicCast(OSArray, props->getObject("IOSurfacePlaneInfo"));
+ 	s->planeCount = 0;
+ 	if (planes != NULL) {
+ 		uint64_t next = s->offset;
